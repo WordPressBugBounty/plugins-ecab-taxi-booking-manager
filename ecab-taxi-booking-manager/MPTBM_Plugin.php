@@ -1,9 +1,10 @@
 <?php
+
 /**
  * Plugin Name: E-cab taxi booking manager
  * Plugin URI: http://mage-people.com
  * Description: A Complete Transportation Solution for WordPress by MagePeople.
- * Version: 1.1.9
+ * Version: 1.2.0
  * Author: MagePeople Team
  * Author URI: http://www.mage-people.com/
  * License: GPL v2 or later
@@ -158,6 +159,7 @@ if (!class_exists('MPTBM_Plugin')) {
 
         public function wptbm_assign_template_to_page()
         {
+            flush_rewrite_rules();
             // Check if the page 'transport-result' exists
             $page = get_page_by_path('transport-result');
             if ($page) {

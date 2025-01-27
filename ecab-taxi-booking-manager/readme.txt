@@ -152,11 +152,12 @@ This transparency is crucial for legal protection. By using this plugin, you ack
 
 
 == Changelog ==
-= 1.4.6 =
+= 1.1.9 =
 1. Manual Pricing Slug is fixed
 2. Fixed Hourly Responsive issue Fixed
 3. KM to mile feature added
-= 1.4.5 =
+
+= 1.1.8 =
 1. Geo Fence fixed and intercity with extra pricing added for pro version 
 2. Return Time and date added
 3. Filter by bag and passenger added
