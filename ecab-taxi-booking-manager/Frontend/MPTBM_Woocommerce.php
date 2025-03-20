@@ -11,8 +11,11 @@ if (!class_exists('MPTBM_Woocommerce')) {
 	{
 		private $custom_order_data = array(); // Property to store the data
 		private $ordered_item_name;
+		private $error;
 		public function __construct()
 		{
+			$this->error = new WP_Error();
+			add_filter('woocommerce_checkout_fields', array($this, 'custom_override_checkout_fields'), 99999);
 			add_action('woocommerce_checkout_update_order_meta', array($this, 'product_custom_field_to_custom_order_notes'), 100, 2);
 			add_filter('woocommerce_add_cart_item_data', array($this, 'add_cart_item_data'), 90, 3);
 			add_action('woocommerce_before_calculate_totals', array($this, 'before_calculate_totals'), 90);
@@ -28,6 +31,20 @@ if (!class_exists('MPTBM_Woocommerce')) {
 			add_action('wp_ajax_nopriv_mptbm_add_to_cart', [$this, 'mptbm_add_to_cart']);
 		}
 		
+		public function custom_override_checkout_fields($fields) {
+			$checkout_helper = new MPTBM_Wc_Checkout_Fields_Helper();
+			$custom_fields = $checkout_helper->get_checkout_fields_for_checkout();
+			
+			if (!empty($custom_fields)) {
+				foreach ($custom_fields as $key => $section_fields) {
+					if (isset($fields[$key]) && is_array($section_fields)) {
+						$fields[$key] = array_merge($fields[$key], $section_fields);
+					}
+				}
+			}
+			
+			return $fields;
+		}
 		public function product_custom_field_to_custom_order_notes($order_id, $data)
 		{
 			foreach ($data as $key => $value) {
@@ -128,9 +145,29 @@ if (!class_exists('MPTBM_Woocommerce')) {
 		{
 			global $woocommerce;
 			$items = $woocommerce->cart->get_cart();
+			
+			// Optional fields that should not trigger validation errors
+			$optional_fields = array(
+				'mptbm_passengers',
+				'mptbm_pickup_time',
+				'mptbm_pickup_date',
+				'mptbm_luggage_size',
+				'mptbm_car_type'
+			);
+
 			foreach ($items as $values) {
 				$post_id = array_key_exists('mptbm_id', $values) ? $values['mptbm_id'] : 0;
 				if (get_post_type($post_id) == MPTBM_Function::get_cpt()) {
+					// Remove validation for optional fields
+					add_filter('woocommerce_checkout_required_field_notice', function($message, $field_label) use ($optional_fields) {
+						foreach ($optional_fields as $optional_field) {
+							if (strpos($field_label, $optional_field) !== false) {
+								return '';
+							}
+						}
+						return $message;
+					}, 10, 2);
+					
 					do_action('mptbm_validate_cart_item', $values, $post_id);
 				}
 			}
@@ -261,7 +298,7 @@ if (!class_exists('MPTBM_Woocommerce')) {
 						$details .= ". Driver email: " . $driver_email;
 					}
 					if ($driver_name) {
-						$details .= ". Driver name: " . $driver_name;
+						$driver_name = $driver_name;
 					}
 
 					// Create Google Calendar link
@@ -727,7 +764,7 @@ if (!class_exists('MPTBM_Woocommerce')) {
 			WC()->cart->empty_cart();
 			ob_start();
 			if ($passed_validation && WC()->cart->add_to_cart($product_id, $quantity) && 'publish' === $product_status) {
-				$checkout_system = MP_Global_Function::get_settings('mptbm_general_settings', 'single_page_checkout', 'no');
+				$checkout_system = MP_Global_Function::get_settings('mptbm_general_settings', 'single_page_checkout', 'yes');
 				if ($checkout_system == 'yes') {
 					echo wc_get_checkout_url();
 				} else {

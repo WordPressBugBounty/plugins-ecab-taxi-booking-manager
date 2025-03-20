@@ -20,7 +20,9 @@
 				?>
                 <div class="tab-content active" id="mptbm_wc_billing_field_settings">
                     <h2>Woocommerce Billing Fields</h2>
-					<?php do_action('mptbm_wc_checkout_add', 'billing'); ?>
+					<?php if (class_exists('MPTBM_Plugin_Pro')): ?>
+						<?php do_action('mptbm_wc_checkout_add', 'billing'); ?>
+					<?php endif; ?>
                     <!-- <table class="wc_gateways wp-list-table widefat striped"> -->
                     <div>
                         <table class="wc_gateways widefat striped">
@@ -50,7 +52,8 @@
                                     <td><span class="<?php echo esc_attr(esc_html((isset($checkout_field['required']) && $checkout_field['required'] == '1') ? 'dashicons dashicons-yes tips' : '')); ?>"></span></td>
                                     <td><span class="checkout-disabled <?php echo esc_attr(esc_html((isset($checkout_field['disabled']) && $checkout_field['disabled'] == '1') ? 'dashicons dashicons-yes tips' : '')); ?>"></span></td>
                                     <td>
-										<?php if (is_plugin_active('service-booking-manager-pro/MPTBM_Plugin_Pro.php')): ?>
+										<?php if (class_exists('MPTBM_Plugin_Pro')): ?>
+											<?php MPTBM_Wc_Checkout_Fields::switch_button($key, 'checkoutSwitchButton', $key, $status, array('key' => 'billing', 'name' => $key)); ?>
 											<?php do_action('mptbm_wc_checkout_action', 'billing', $key, $checkout_field); ?>
 										<?php else: ?>
 											<?php MPTBM_Wc_Checkout_Fields::switch_button($key, 'checkoutSwitchButton', $key, $status, array('key' => 'billing', 'name' => $key)); ?>

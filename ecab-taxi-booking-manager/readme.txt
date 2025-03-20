@@ -16,8 +16,8 @@ A comprehensive taxi and chauffeur booking solution with fare calculations, inte
 [Taxi and Chauffeur Booking service Manager](https://mage-people.com/product/wordpress-taxi-cab-booking-plugin-for-woocommerce/) is a dynamic WordPress taxi and Chauffeur booking plugin that enhances your website functionality to leverage your taxi booking business potential. It allows you to create a fully functional taxi booking system, providing a convenient way for customers to book rides online. Whether you run a taxi service or need to integrate booking capabilities for transportation services, this plugin has got you covered.
 
 ## Make Yourself Comfortable With:
-🧶 [View Live Taxi Booking Demo](https://taxi.mage-people.com/)
-👉 [Plugin Documentation](https://docs.mage-people.com/ecab-taxi-booking-manager/)
+🧶 [View Live Taxi Booking Demo](https://demo.ecabtaxi.com/)
+👉 [Plugin Documentation](https://ecabtaxi.com/docs/)
 
 ## Taxi and Chauffeur Booking Solution that Changes the Game
 Since the taxi business has evolved in different shapes with time, online taxi booking has become increasingly popular. Ecab has taken your taxi booking hassle creating the taxi booking manager plugin solution for your WordPress website. It is powered by WooCommerce and known by WordPress users as a taxi booking manager for WooCommerce.
