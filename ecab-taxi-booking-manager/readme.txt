@@ -205,22 +205,28 @@ This transparency is crucial for legal protection. By using this plugin, you ack
 
 
 == Changelog ==
+
 = 1.2.5 =
 1. No transport available section can be changed Now
 2. Issue fixed with transport-result page slug
+
 = 1.2.4 =
 1. Documentation changed
+
 = 1.2.3 =
 1. Google calendar integration added
 2. Woocommerce order analytics added
 3. Rest Api documentation added
+
 = 1.2.2 = 
 1. Gutenberg block added for booking form
 2. Elementor widget added for booking form
+
 = 1.2.1 =
 1. Manual Pricing Slug is fixed
 2. Fixed Hourly Responsive issue Fixed
 3. KM to mile feature added
+
 = 1.2.0 =
 1. Geo Fence fixed and intercity with extra pricing added for pro version 
 2. Return Time and date added
