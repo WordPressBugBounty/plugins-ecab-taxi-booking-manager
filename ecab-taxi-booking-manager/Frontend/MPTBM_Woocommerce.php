@@ -21,41 +21,191 @@ if (!class_exists('MPTBM_Woocommerce')) {
 			add_action('woocommerce_before_calculate_totals', array($this, 'before_calculate_totals'), 90);
 			add_filter('woocommerce_cart_item_thumbnail', array($this, 'cart_item_thumbnail'), 90, 3);
 			add_filter('woocommerce_get_item_data', array($this, 'get_item_data'), 90, 2);
+			// Replace displayed quantity on order/thank-you using transport quantity meta
+			add_filter('woocommerce_order_item_quantity_html', array($this, 'filter_order_item_quantity'), 10, 2);
 			//************//
 			add_action('woocommerce_after_checkout_validation', array($this, 'after_checkout_validation'));
 			add_action('woocommerce_checkout_create_order_line_item', array($this, 'checkout_create_order_line_item'), 90, 4);
+
 			add_action('woocommerce_checkout_order_processed', array($this, 'checkout_order_processed'), 90, 3);
 			add_action('woocommerce_store_api_checkout_order_processed', array($this, 'checkout_order_processed'), 90, 3);
 			add_filter('woocommerce_order_status_changed', array($this, 'order_status_changed'));
 			/*****************************/
 			add_action('wp_ajax_mptbm_add_to_cart', [$this, 'mptbm_add_to_cart']);
 			add_action('wp_ajax_nopriv_mptbm_add_to_cart', [$this, 'mptbm_add_to_cart']);
+
+			// Add filter to modify WooCommerce validation process
+			add_filter('woocommerce_checkout_posted_data', array($this, 'modify_checkout_posted_data'), 99);
+			add_filter('woocommerce_checkout_required_field_notice', array($this, 'modify_required_field_notice'), 99, 2);
 		}
-		
+
 		public function custom_override_checkout_fields($fields) {
 			$checkout_helper = new MPTBM_Wc_Checkout_Fields_Helper();
 			$custom_fields = $checkout_helper->get_checkout_fields_for_checkout();
-			
-			if (!empty($custom_fields)) {
-				foreach ($custom_fields as $key => $section_fields) {
-					if (isset($fields[$key]) && is_array($section_fields)) {
-						$fields[$key] = array_merge($fields[$key], $section_fields);
+
+			// Get all custom fields from options
+			$options = get_option('mptbm_custom_checkout_fields', array());
+			$special_fields = array();
+			$deleted_fields = array();
+
+			// First, get all deleted fields
+			foreach (['billing', 'shipping', 'order'] as $section) {
+				if (isset($options[$section]) && is_array($options[$section])) {
+					foreach ($options[$section] as $field_key => $field) {
+						if (isset($field['deleted']) && $field['deleted'] == 'deleted') {
+							$deleted_fields[] = $field_key;
+						}
 					}
 				}
 			}
-			
+
+			// Build special fields array dynamically from custom fields, excluding deleted ones
+			foreach (['billing', 'shipping', 'order'] as $section) {
+				if (isset($options[$section]) && is_array($options[$section])) {
+					foreach ($options[$section] as $field_key => $field) {
+						// Skip if field is deleted
+						if (in_array($field_key, $deleted_fields)) {
+							continue;
+						}
+						// Check if the field is marked as special in the settings
+						if (isset($field['special']) && $field['special'] == '1') {
+							$special_fields[] = $field_key;
+							$special_fields[] = str_replace('_', ' ', $field_key);
+						}
+					}
+				}
+			}
+
+			// Check if we have values for any of our special fields
+			$has_special_field_value = false;
+			foreach ($special_fields as $special_field) {
+				if (isset($_POST[$special_field]) && !empty($_POST[$special_field])) {
+					$has_special_field_value = true;
+					break;
+				}
+			}
+
+			// Get disabled fields
+			$disabled_fields = array();
+			foreach (['billing', 'shipping', 'order'] as $section) {
+				if (isset($options[$section]) && is_array($options[$section])) {
+					foreach ($options[$section] as $field_key => $field) {
+						if (isset($field['disabled']) && $field['disabled'] == '1') {
+							$disabled_fields[] = $field_key;
+						}
+					}
+				}
+			}
+
+			// Remove disabled and deleted fields from the original fields array
+			foreach ($fields as $key => $section_fields) {
+				if (is_array($section_fields)) {
+					foreach ($section_fields as $field_key => $field) {
+						// Remove deleted fields first
+						if (in_array($field_key, $deleted_fields)) {
+							unset($fields[$key][$field_key]);
+							continue;
+						}
+
+						// Skip special fields that aren't deleted
+						if (in_array($field_key, $special_fields)) {
+							continue;
+						}
+
+						// Remove disabled fields
+						if (in_array($field_key, $disabled_fields)) {
+							unset($fields[$key][$field_key]);
+						}
+
+						// Remove any 'disable_filed' fields
+						if ($field_key === 'disable_filed') {
+							unset($fields[$key][$field_key]);
+						}
+					}
+				}
+			}
+
+			// Now merge with custom fields, excluding deleted ones
+			if (!empty($custom_fields)) {
+				foreach ($custom_fields as $key => $section_fields) {
+					if (isset($fields[$key]) && is_array($section_fields)) {
+						foreach ($section_fields as $field_key => $field) {
+							// Skip if field is deleted
+							if (in_array($field_key, $deleted_fields)) {
+								continue;
+							}
+
+							// Special handling for special fields
+							if (in_array($field_key, $special_fields)) {
+								if ($has_special_field_value) {
+									$section_fields[$field_key]['required'] = false;
+								}
+							}
+
+							// Make sure required is set correctly
+							if (isset($field['required'])) {
+								$section_fields[$field_key]['required'] = ($field['required'] == '1' || $field['required'] === true);
+							}
+
+							// Only add the field if it's not disabled and not deleted
+							if (!in_array($field_key, $disabled_fields)) {
+								$fields[$key][$field_key] = $section_fields[$field_key];
+							}
+						}
+					}
+				}
+			}
+
 			return $fields;
 		}
 		public function product_custom_field_to_custom_order_notes($order_id, $data)
 		{
+			// Get all custom fields from options
+			$options = get_option('mptbm_custom_checkout_fields', array());
+			$special_fields = array();
+
+			// Build special fields array dynamically from custom fields
+			foreach (['billing', 'shipping', 'order'] as $section) {
+				if (isset($options[$section]) && is_array($options[$section])) {
+					foreach ($options[$section] as $field_key => $field) {
+						// Check if the field is marked as special in the settings
+						if (isset($field['special']) && $field['special'] == '1') {
+							// Add both underscore and space versions of the field key
+							$special_fields[] = $field_key;
+							$special_fields[] = str_replace('_', ' ', $field_key);
+						}
+					}
+				}
+			}
+
+			// Process all data
 			foreach ($data as $key => $value) {
+				// Save order data
 				if (strpos($key, 'order') === 0) {
 					$this->custom_order_data[$key] = $value;
+				}
+
+				// Save special fields
+				foreach ($special_fields as $special_field) {
+					if ($key === $special_field && !empty($value)) {
+						// Save with both formats (with and without underscore prefix)
+						update_post_meta($order_id, $key, sanitize_text_field($value));
+						update_post_meta($order_id, '_' . $key, sanitize_text_field($value));
+
+						// Also save with normalized key (spaces replaced with underscores)
+						$normalized_key = str_replace(' ', '_', $key);
+						if ($normalized_key !== $key) {
+							update_post_meta($order_id, $normalized_key, sanitize_text_field($value));
+							update_post_meta($order_id, '_' . $normalized_key, sanitize_text_field($value));
+						}
+					}
 				}
 			}
 		}
 		public function add_cart_item_data($cart_item_data, $product_id)
 		{
+			$quantity = isset($_POST['transport_quantity']) ? sanitize_text_field($_POST['transport_quantity']) : 1;
+			$cart_item_data['mptbm_transport_quantity'] = $quantity;
 			$linked_id = MP_Global_Function::get_post_info($product_id, 'link_mptbm_id', $product_id);
 			$post_id = is_string(get_post_status($linked_id)) ? $linked_id : $product_id;
 			if (get_post_type($post_id) == MPTBM_Function::get_cpt()) {
@@ -66,10 +216,20 @@ if (!class_exists('MPTBM_Woocommerce')) {
 				$waiting_time = isset($_POST['mptbm_waiting_time']) ? sanitize_text_field($_POST['mptbm_waiting_time']) : 0;
 				$return = isset($_POST['mptbm_taxi_return']) ? sanitize_text_field($_POST['mptbm_taxi_return']) : 1;
 				$fixed_hour = isset($_POST['mptbm_fixed_hours']) ? sanitize_text_field($_POST['mptbm_fixed_hours']) : 0;
-				$total_price = $this->get_cart_total_price($post_id);
+				// Calculate single-unit transport price
 				$price = MPTBM_Function::get_price($post_id, $distance, $duration, $start_place, $end_place, $waiting_time, $return, $fixed_hour);
 				$wc_price = MP_Global_Function::wc_price($post_id, $price);
 				$raw_price = MP_Global_Function::price_convert_raw($wc_price);
+				// Multiply transport unit price by quantity
+				$transport_total_price = $raw_price * $quantity;
+				// Calculate extra service total (single add-on, not per transport unit)
+				$extra_services = self::cart_extra_service_info($post_id);
+				$extra_total_price = 0;
+				foreach ($extra_services as $svc) {
+					$extra_total_price += ($svc['service_price'] * $svc['service_quantity']);
+				}
+				// Final total: transport plus extra services
+				$total_price = $transport_total_price + $extra_total_price;
 				$cart_item_data['mptbm_date'] = isset($_POST['mptbm_date']) ? sanitize_text_field($_POST['mptbm_date']) : '';
 				$cart_item_data['mptbm_taxi_return'] = $return;
 				$cart_item_data['mptbm_waiting_time'] = $waiting_time;
@@ -85,6 +245,7 @@ if (!class_exists('MPTBM_Woocommerce')) {
 				$cart_item_data['mptbm_tp'] = $total_price;
 				$cart_item_data['line_total'] = $total_price;
 				$cart_item_data['line_subtotal'] = $total_price;
+				$cart_item_data['mptbm_passengers'] = isset($_POST['mptbm_passengers']) ? absint($_POST['mptbm_passengers']) : 1;
 				if ($return > 1 && MP_Global_Function::get_settings('mptbm_general_settings', 'enable_return_in_different_date') == 'yes') {
 					$return_target_date = isset($_POST['mptbm_return_date']) ? sanitize_text_field($_POST['mptbm_return_date']) : '';
 					$return_target_time = isset($_POST['mptbm_return_time']) ? sanitize_text_field($_POST['mptbm_return_time']) : '';
@@ -116,7 +277,6 @@ if (!class_exists('MPTBM_Woocommerce')) {
 					$value['data']->set_price($total_price);
 					$value['data']->set_regular_price($total_price);
 					$value['data']->set_sale_price($total_price);
-					$value['data']->set_sold_individually('yes');
 					$value['data']->get_price();
 				}
 			}
@@ -131,13 +291,14 @@ if (!class_exists('MPTBM_Woocommerce')) {
 		}
 		public function get_item_data($item_data, $cart_item)
 		{
-
 			$post_id = array_key_exists('mptbm_id', $cart_item) ? $cart_item['mptbm_id'] : 0;
 			if (get_post_type($post_id) == MPTBM_Function::get_cpt()) {
 				ob_start();
 				$this->show_cart_item($cart_item, $post_id);
 				do_action('mptbm_show_cart_item', $cart_item, $post_id);
 				$item_data[] = array('key' => esc_html__('Booking Details ', 'ecab-taxi-booking-manager'), 'value' => ob_get_clean());
+				
+			
 			}
 			return $item_data;
 		}
@@ -146,7 +307,7 @@ if (!class_exists('MPTBM_Woocommerce')) {
 		{
 			global $woocommerce;
 			$items = $woocommerce->cart->get_cart();
-			
+
 			// Optional fields that should not trigger validation errors
 			$optional_fields = array(
 				'mptbm_passengers',
@@ -156,48 +317,322 @@ if (!class_exists('MPTBM_Woocommerce')) {
 				'mptbm_car_type'
 			);
 
+			// Get all custom fields from options
+			$options = get_option('mptbm_custom_checkout_fields', array());
+			$special_fields = array();
+
+			// Build special fields array dynamically from custom fields
+			foreach (['billing', 'shipping', 'order'] as $section) {
+				if (isset($options[$section]) && is_array($options[$section])) {
+					foreach ($options[$section] as $field_key => $field) {
+						// Check if the field is marked as special in the settings
+						if (isset($field['special']) && $field['special'] == '1') {
+							// Add both underscore and space versions of the field key
+							$special_fields[] = $field_key;
+							$special_fields[] = str_replace('_', ' ', $field_key);
+						}
+					}
+				}
+			}
+
+			// Check if we have values for any of our special fields
+			$has_special_field_value = false;
+			foreach ($special_fields as $special_field) {
+				if (isset($_POST[$special_field]) && !empty($_POST[$special_field])) {
+					$has_special_field_value = true;
+					break;
+				}
+			}
+
+			// Get custom checkout fields
+			$options = get_option('mptbm_custom_checkout_fields');
+
+			// Add a filter to remove validation errors for disabled fields
+			add_filter('woocommerce_checkout_required_field_notice', function($message, $field_label) use ($options, $optional_fields, $special_fields, $has_special_field_value) {
+				// First check if it's one of our optional fields
+				foreach ($optional_fields as $optional_field) {
+					if (strpos($field_label, $optional_field) !== false) {
+						return '';
+					}
+				}
+
+				// Special handling for custom fields
+				foreach ($special_fields as $custom_field) {
+					if (strpos($field_label, $custom_field) !== false) {
+						// If any special field has a value, skip validation for all special fields
+						if ($has_special_field_value) {
+							return '';
+						}
+					}
+				}
+
+				// Then check if it's a disabled field in our custom fields
+				foreach (['billing', 'shipping', 'order'] as $section) {
+					if (isset($options[$section]) && is_array($options[$section])) {
+						foreach ($options[$section] as $field_key => $field) {
+							// If field is disabled, remove any validation errors for it
+							if (isset($field['disabled']) && $field['disabled'] == '1') {
+								// Check if this field label contains our field key
+								if (strpos($field_label, $field_key) !== false) {
+									return '';
+								}
+							}
+							// If field is not required, remove any validation errors for it
+							if (isset($field['required']) && $field['required'] == '0') {
+								// Check if this field label contains our field key
+								if (strpos($field_label, $field_key) !== false) {
+									return '';
+								}
+							}
+						}
+					}
+				}
+
+				return $message;
+			}, 10, 2);
+
 			foreach ($items as $values) {
 				$post_id = array_key_exists('mptbm_id', $values) ? $values['mptbm_id'] : 0;
 				if (get_post_type($post_id) == MPTBM_Function::get_cpt()) {
-					// Remove validation for optional fields
-					add_filter('woocommerce_checkout_required_field_notice', function($message, $field_label) use ($optional_fields) {
-						foreach ($optional_fields as $optional_field) {
-							if (strpos($field_label, $optional_field) !== false) {
-								return '';
+					// Add a filter to remove WooCommerce validation errors for our custom fields
+					add_filter('woocommerce_checkout_posted_data', function($data) {
+						// Special handling for custom fields
+						$custom_fields = array('billing_Passport_No', 'billing_Flight_No');
+
+						// Check if at least one custom field has a value
+						$has_custom_field_value = false;
+						foreach ($custom_fields as $custom_field) {
+							if (isset($data[$custom_field]) && !empty($data[$custom_field])) {
+								$has_custom_field_value = true;
+								break;
 							}
 						}
-						return $message;
-					}, 10, 2);
-					
+
+						// If at least one custom field has a value, make sure all custom fields pass validation
+						if ($has_custom_field_value) {
+							foreach ($custom_fields as $custom_field) {
+								if (!isset($data[$custom_field]) || empty($data[$custom_field])) {
+									// Set a dummy value to pass validation
+									$data[$custom_field] = 'validated';
+								}
+							}
+						}
+
+						// Get custom checkout fields
+						$options = get_option('mptbm_custom_checkout_fields');
+
+						// Handle disabled fields
+						foreach (['billing', 'shipping', 'order'] as $section) {
+							if (isset($options[$section]) && is_array($options[$section])) {
+								foreach ($options[$section] as $field_key => $field) {
+									// If field is disabled, set a dummy value to pass validation
+									if (isset($field['disabled']) && $field['disabled'] == '1') {
+										$data[$field_key] = 'disabled_field';
+									}
+									// If field is not required, make sure it passes validation
+									if (isset($field['required']) && $field['required'] == '0' && (!isset($data[$field_key]) || empty($data[$field_key]))) {
+										$data[$field_key] = 'optional_field';
+									}
+								}
+							}
+						}
+
+						return $data;
+					});
+
 					do_action('mptbm_validate_cart_item', $values, $post_id);
 				}
 			}
 		}
+		/**
+		 * Modify the checkout posted data to handle disabled fields
+		 *
+		 * @param array $data The posted data
+		 * @return array Modified posted data
+		 */
+		public function modify_checkout_posted_data($data) {
+			// Get custom checkout fields
+			$options = get_option('mptbm_custom_checkout_fields', array());
+			$special_fields = array();
+			$deleted_fields = array();
+
+			// First, get all deleted fields
+			foreach (['billing', 'shipping', 'order'] as $section) {
+				if (isset($options[$section]) && is_array($options[$section])) {
+					foreach ($options[$section] as $field_key => $field) {
+						if (isset($field['deleted']) && $field['deleted'] == 'deleted') {
+							$deleted_fields[] = $field_key;
+						}
+					}
+				}
+			}
+
+			// Build special fields array dynamically from custom fields, excluding deleted ones
+			foreach (['billing', 'shipping', 'order'] as $section) {
+				if (isset($options[$section]) && is_array($options[$section])) {
+					foreach ($options[$section] as $field_key => $field) {
+						// Skip if field is deleted
+						if (in_array($field_key, $deleted_fields)) {
+							continue;
+						}
+						// Check if the field is marked as special in the settings
+						if (isset($field['special']) && $field['special'] == '1') {
+							$special_fields[] = $field_key;
+							$special_fields[] = str_replace('_', ' ', $field_key);
+						}
+					}
+				}
+			}
+
+			// Check if we have values for any of our special fields
+			$has_special_field_value = false;
+			foreach ($special_fields as $special_field) {
+				if (isset($data[$special_field]) && !empty($data[$special_field])) {
+					$has_special_field_value = true;
+					break;
+				}
+			}
+
+			// If any special field has a value, make sure all fields pass validation
+			if ($has_special_field_value) {
+				// Set dummy values for all required fields to pass validation
+				foreach (['billing', 'shipping', 'order'] as $section) {
+					if (isset($options[$section]) && is_array($options[$section])) {
+						foreach ($options[$section] as $field_key => $field) {
+							// Skip if field is deleted
+							if (in_array($field_key, $deleted_fields)) {
+								continue;
+							}
+							// If field is disabled or not required, set a dummy value
+							if ((isset($field['disabled']) && $field['disabled'] == '1') ||
+								(isset($field['required']) && $field['required'] == '0')) {
+								if (!isset($data[$field_key]) || empty($data[$field_key])) {
+									$data[$field_key] = 'validated_field';
+								}
+							}
+						}
+					}
+				}
+
+				// Also handle default WooCommerce fields
+				$default_fields = array(
+					'billing_first_name', 'billing_last_name', 'billing_company', 'billing_country',
+					'billing_address_1', 'billing_address_2', 'billing_city', 'billing_state',
+					'billing_postcode', 'billing_phone', 'billing_email'
+				);
+
+				foreach ($default_fields as $field) {
+					if (!isset($data[$field]) || empty($data[$field])) {
+						$data[$field] = 'validated_field';
+					}
+				}
+			}
+
+			// Handle disabled fields
+			foreach (['billing', 'shipping', 'order'] as $section) {
+				if (isset($options[$section]) && is_array($options[$section])) {
+					foreach ($options[$section] as $field_key => $field) {
+						// Skip if field is deleted
+						if (in_array($field_key, $deleted_fields)) {
+							if (isset($data[$field_key])) {
+								unset($data[$field_key]);
+							}
+							continue;
+						}
+						// If field is disabled, set a dummy value
+						if (isset($field['disabled']) && $field['disabled'] == '1') {
+							if (!isset($data[$field_key]) || empty($data[$field_key])) {
+								$data[$field_key] = 'disabled_field';
+							}
+						}
+					}
+				}
+			}
+
+			// Remove any 'disable_filed' fields
+			if (isset($data['disable_filed'])) {
+				unset($data['disable_filed']);
+			}
+
+			return $data;
+		}
+
+		/**
+		 * Modify the required field notice to handle disabled fields
+		 *
+		 * @param string $message The error message
+		 * @param string $field_label The field label
+		 * @return string Modified error message
+		 */
+		public function modify_required_field_notice($message, $field_label) {
+			// Get custom checkout fields
+			$options = get_option('mptbm_custom_checkout_fields');
+
+			// Special fields that should be handled specially
+			// Include both formats (with space and with underscore)
+			$special_fields = array(
+				'billing_Passport_No', 'billing_Flight_No',
+				'billing_Passport No', 'billing_Flight No'
+			);
+
+			// Check if we have values for any of our special fields
+			$has_special_field_value = false;
+			foreach ($special_fields as $special_field) {
+				if (isset($_POST[$special_field]) && !empty($_POST[$special_field])) {
+					$has_special_field_value = true;
+					break;
+				}
+			}
+
+			// If any special field has a value, skip validation for all fields
+			if ($has_special_field_value) {
+				return '';
+			}
+
+			// Check if it's a disabled field
+			foreach (['billing', 'shipping', 'order'] as $section) {
+				if (isset($options[$section]) && is_array($options[$section])) {
+					foreach ($options[$section] as $field_key => $field) {
+						// If field is disabled, remove any validation errors for it
+						if (isset($field['disabled']) && $field['disabled'] == '1') {
+							// Check if this field label contains our field key
+							if (strpos($field_label, $field_key) !== false) {
+								return '';
+							}
+						}
+					}
+				}
+			}
+
+			return $message;
+		}
+
 		public function checkout_create_order_line_item($item, $cart_item_key, $values)
 		{
 			$this->ordered_item_name = $item->get_name();
 
 			$post_id = array_key_exists('mptbm_id', $values) ? $values['mptbm_id'] : 0;
 			if (get_post_type($post_id) == MPTBM_Function::get_cpt()) {
-				$date = $values['mptbm_date'] ?? '';
-				$start_location = $values['mptbm_start_place'] ?? '';
-				$end_location = $values['mptbm_end_place'] ?? '';
-				$distance = $values['mptbm_distance'] ?? '';
-				$distance_text = $values['mptbm_distance_text'] ?? '';
-				$duration = $values['mptbm_duration'] ?? '';
-				$duration_text = $values['mptbm_duration_text'] ?? '';
-				$base_price = $values['mptbm_base_price'] ?? '';
+				$date = isset($values['mptbm_date']) ? $values['mptbm_date'] : '';
+				$start_location = isset($values['mptbm_start_place']) ? $values['mptbm_start_place'] : '';
+				$end_location = isset($values['mptbm_end_place']) ? $values['mptbm_end_place'] : '';
+				$distance = isset($values['mptbm_distance']) ? $values['mptbm_distance'] : '';
+				$distance_text = isset($values['mptbm_distance_text']) ? $values['mptbm_distance_text'] : '';
+				$duration = isset($values['mptbm_duration']) ? $values['mptbm_duration'] : '';
+				$duration_text = isset($values['mptbm_duration_text']) ? $values['mptbm_duration_text'] : '';
+				$base_price = isset($values['mptbm_base_price']) ? $values['mptbm_base_price'] : '';
 				$return = $values['mptbm_taxi_return'] ?? '';
 				$waiting_time = $values['mptbm_waiting_time'] ?? '';
 				$fixed_time = $values['mptbm_fixed_hours'] ?? 0;
 				$extra_service = $values['mptbm_extra_service_info'] ?? [];
-				$price = $values['mptbm_tp'] ?? '';
-
+				$price = isset($values['mptbm_tp']) ? $values['mptbm_tp'] : '';
+				$transport_quantity = isset($values['mptbm_transport_quantity']) ? $values['mptbm_transport_quantity'] : 1;
+				$item->set_quantity( $transport_quantity );
 				$item->add_meta_data(esc_html__('Pickup Location ', 'ecab-taxi-booking-manager'), $start_location);
 				$item->add_meta_data(esc_html__('Drop-Off Location ', 'ecab-taxi-booking-manager'), $end_location);
 				$price_type = MP_Global_Function::get_post_info($post_id, 'mptbm_price_based');
 				if ($price_type !== 'manual') {
-					$item->add_meta_data(esc_html__('Approximate Distance ', 'ecab-taxi-booking-manager'), $distance_text);
+					$item->add_meta_data(esc_html__('Approximate Distancee ', 'ecab-taxi-booking-manager'), $distance_text);
 					$item->add_meta_data(esc_html__('Approximate Time ', 'ecab-taxi-booking-manager'), $duration_text);
 				}
 
@@ -208,8 +643,16 @@ if (!class_exists('MPTBM_Woocommerce')) {
 					$item->add_meta_data(esc_html__('Service Times', 'ecab-taxi-booking-manager'), $fixed_time . ' ' . esc_html__('Hour ', 'ecab-taxi-booking-manager'));
 				}
 				$item->add_meta_data(esc_html__('Date ', 'ecab-taxi-booking-manager'), esc_html(MP_Global_Function::date_format($date)));
-
 				$item->add_meta_data(esc_html__('Time ', 'ecab-taxi-booking-manager'), esc_html(MP_Global_Function::date_format($date, 'time')));
+				$item->add_meta_data(esc_html__('Transport Quantity ', 'ecab-taxi-booking-manager'), $transport_quantity);
+				// Add passenger count to order meta only if the setting is enabled
+				$show_passengers = MP_Global_Function::get_settings('mptbm_general_settings', 'show_number_of_passengers', 'no');
+				if ($show_passengers === 'yes') {
+					$passengers = isset($values['mptbm_passengers']) ? absint($values['mptbm_passengers']) : 1;
+					$item->add_meta_data(esc_html__('Number of Passengers', 'ecab-taxi-booking-manager'), $passengers);
+					$item->add_meta_data('_mptbm_passengers', $passengers);
+				}
+
 				if ($return && $return > 1) {
 					$item->add_meta_data(esc_html__('Transfer Type', 'ecab-taxi-booking-manager'), esc_html__('Return ', 'ecab-taxi-booking-manager'));
 					if (MP_Global_Function::get_settings('mptbm_general_settings', 'enable_return_in_different_date') == 'yes') {
@@ -243,13 +686,14 @@ if (!class_exists('MPTBM_Woocommerce')) {
 						if ($return_date_time && $return_time !== "") {
 							$return_date_time .= " " . $return_time_formatted;
 						}
-						
+
 
 						$item->add_meta_data(esc_html__('Return Date', 'ecab-taxi-booking-manager'), esc_html(MP_Global_Function::date_format($return_date_time)));
 						$item->add_meta_data(esc_html__('Return Time', 'ecab-taxi-booking-manager'), esc_html(MP_Global_Function::date_format($return_date_time, 'time')));
 						$item->add_meta_data('_mptbm_return_date', $return_date);
 						$item->add_meta_data('_mptbm_return_time', $return_time);
 					}
+					$item->add_meta_data(esc_html__('Transport Quantity', 'ecab-taxi-booking-manager'), $transport_quantity);
 				}
 				$item->add_meta_data(esc_html__('Price ', 'ecab-taxi-booking-manager'), wp_kses_post(wc_price($base_price)));
 				if (sizeof($extra_service) > 0) {
@@ -330,6 +774,7 @@ if (!class_exists('MPTBM_Woocommerce')) {
 				$item->add_meta_data('_mptbm_base_price', $base_price);
 				$item->add_meta_data('_mptbm_tp', $price);
 				$item->add_meta_data('_mptbm_service_info', $extra_service);
+				$item->add_meta_data('_mptbm_transport_quantity', $transport_quantity);
 
 				do_action('mptbm_checkout_create_order_line_item', $item, $values);
 			}
@@ -342,15 +787,10 @@ if (!class_exists('MPTBM_Woocommerce')) {
 			if ( ! $order_id ) {
 				return;
 			}
-			// Log the start of the function
-			error_log('MPTBM: checkout_order_processed function called with order_id: ' . $order_id);
-			
+
 			// Send email notification
 			$admin_email = get_option('admin_email');
 			wp_mail($admin_email, 'MPTBM Order Processed', 'Order ID: ' . $order_id);
-			
-			// Log a simpler backtrace with limited depth
-			error_log('MPTBM: Simple backtrace - ' . print_r(debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS, 3), true));
 			if ($order_id) {
 
 				$order = wc_get_order($order_id);
@@ -370,7 +810,6 @@ if (!class_exists('MPTBM_Woocommerce')) {
 					$meta_array[$meta_key] = $meta_value;
 				}
 
-
 				// Unset any meta keys you don't want to include
 				unset($meta_array['_billing_address_index']);
 				unset($meta_array['_shipping_address_index']);
@@ -383,8 +822,8 @@ if (!class_exists('MPTBM_Woocommerce')) {
 				}
 				$order_status = $order->get_status();
 				$order_meta = get_post_meta($order_id);
-				$payment_method = $order_meta['_payment_method_title'][0] ?? '';
-				$user_id = $order_meta['_customer_user'][0] ?? '';
+				$payment_method = isset($order_meta['_payment_method_title'][0]) ? $order_meta['_payment_method_title'][0] : '';
+				$user_id = isset($order_meta['_customer_user'][0]) ? $order_meta['_customer_user'][0] : '';
 
 				if ($order_status != 'failed') {
 					foreach ($order->get_items() as $item_id => $item) {
@@ -418,7 +857,9 @@ if (!class_exists('MPTBM_Woocommerce')) {
 							$service_info = $service ? MP_Global_Function::data_sanitize($service) : [];
 							$price = MP_Global_Function::get_order_item_meta($item_id, '_mptbm_tp');
 							$price = $price ? MP_Global_Function::data_sanitize($price) : [];
-
+							$transport_quantity = MP_Global_Function::get_order_item_meta($item_id, '_mptbm_transport_quantity');
+							$quantity = $transport_quantity ? MP_Global_Function::data_sanitize($transport_quantity) : 1;
+							
 							// Add meta array data to the $data array
 							$data = array_merge($meta_array, [
 								'mptbm_id' => $post_id,
@@ -440,13 +881,17 @@ if (!class_exists('MPTBM_Woocommerce')) {
 								'mptbm_billing_name' => $order->get_billing_first_name() . ' ' . $order->get_billing_last_name(),
 								'mptbm_billing_email' => $order->get_billing_email(),
 								'mptbm_billing_phone' => $order->get_billing_phone(),
-								'mptbm_target_pickup_interval_time' => MPTBM_Function::get_general_settings('mptbm_pickup_interval_time', '30')
+								'mptbm_target_pickup_interval_time' => MPTBM_Function::get_general_settings('mptbm_pickup_interval_time', '30'),
+								'mptbm_transport_quantity' => $quantity
 							]);
-							
-							
+
+							// Only add passenger count if the setting is enabled
+							$show_passengers = MP_Global_Function::get_settings('mptbm_general_settings', 'show_number_of_passengers', 'no');
+							if ($show_passengers === 'yes') {
+								$data['mptbm_passengers'] = MP_Global_Function::get_order_item_meta($item_id, '_mptbm_passengers') ?? 1;
+							}
+
 							$booking_data = apply_filters('add_mptbm_booking_data', $data, $post_id);
-							
-							
 							self::add_cpt_data('mptbm_booking', $booking_data['mptbm_billing_name'], $booking_data);
 
 							if (sizeof($service_info) > 0) {
@@ -610,11 +1055,29 @@ if (!class_exists('MPTBM_Woocommerce')) {
 								<span><?php echo esc_html($fixed_time); ?><?php esc_html_e('Hours', 'ecab-taxi-booking-manager'); ?></span>
 							</li>
 						<?php } ?>
-
+						<?php 
+						$show_passengers = MP_Global_Function::get_settings('mptbm_general_settings', 'show_number_of_passengers', 'no');
+						if ($show_passengers === 'yes') { 
+						?>
+						<li>
+							<span class="fas fa-users"></span>
+							<h6 class="_mR_xs"><?php esc_html_e('Number of Passengers', 'ecab-taxi-booking-manager'); ?> :</h6>
+							<span><?php echo esc_html($cart_item['mptbm_passengers']); ?></span>
+						</li>
+						<?php } ?>
 						<li>
 							<span class="fa fa-tag"></span>
 							<h6 class="_mR_xs"><?php esc_html_e('Base Price : ', 'ecab-taxi-booking-manager'); ?></h6>
 							<span><?php echo wp_kses_post(wc_price($base_price)); ?></span>
+						</li>
+						<?php
+						// Display transport quantity
+						$transport_quantity = isset($cart_item['mptbm_transport_quantity']) ? absint($cart_item['mptbm_transport_quantity']) : 1;
+						?>
+						<li>
+							<span class="fas fa-car"></span>
+							<h6 class="_mR_xs"><?php esc_html_e('Transport Quantity', 'ecab-taxi-booking-manager'); ?> :</h6>
+							<span><?php echo esc_html($transport_quantity); ?></span>
 						</li>
 						<?php do_action('mptbm_cart_item_display', $cart_item, $post_id); ?>
 					</ul>
@@ -755,7 +1218,7 @@ if (!class_exists('MPTBM_Woocommerce')) {
 				'post_status' => $status,
 				'post_type' => $cpt_name
 			);
-			
+
 			$post_id = wp_insert_post($new_post);
 			if (sizeof($meta_data) > 0) {
 				foreach ($meta_data as $key => $value) {
@@ -770,9 +1233,10 @@ if (!class_exists('MPTBM_Woocommerce')) {
 		/****************************/
 		public function mptbm_add_to_cart()
 		{
+			$quantity = isset($_POST['transport_quantity']) ? sanitize_text_field($_POST['transport_quantity']) : 1;
+			
 			$link_id = absint($_POST['link_id']);
 			$product_id = apply_filters('woocommerce_add_to_cart_product_id', $link_id);
-			$quantity = 1;
 			$passed_validation = apply_filters('woocommerce_add_to_cart_validation', true, $product_id, $quantity);
 			$product_status = get_post_status($product_id);
 			WC()->cart->empty_cart();
@@ -800,6 +1264,20 @@ if (!class_exists('MPTBM_Woocommerce')) {
 			}
 			echo ob_get_clean();
 			die();
+		}
+		/**
+		 * Override order-item quantity HTML with transport quantity meta.
+		 *
+		 * @param string       $quantity_html Original quantity HTML.
+		 * @param WC_Order_Item $item Order item instance.
+		 * @return string Modified quantity HTML.
+		 */
+		public function filter_order_item_quantity($quantity_html, $item) {
+			$transport_quantity = $item->get_meta('mptbm_transport_quantity', true);
+			if ($transport_quantity && absint($transport_quantity) > 0) {
+				return ' <strong class="product-quantity">&times;&nbsp;' . absint($transport_quantity) . '</strong>';
+			}
+			return $quantity_html;
 		}
 	}
 	new MPTBM_Woocommerce();
