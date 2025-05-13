@@ -71,7 +71,7 @@ Easily switch between different pricing models using tabs for a seamless booking
 
 **📧 📅 Google Calendar Integration **
 Automatically add booking details to the admin's Google Calendar.
-Provide a link after booking so customers can easily add the event to their own calendar.
+Provide a link after booking so customers can easily add the event to their own calendar
 
 **📧 Email Customization**
 Receive order confirmations and deliver PDF receipts easily after successful payments with dual email functions.
@@ -96,6 +96,10 @@ Utilize Google Maps to delineate both intercity and intracity zones, along with 
 
 **🧢 Driver Panel to track service status**
 Driver panel feature enables administrators to assign vehicles to drivers. Additionally, email notifications are automatically sent to relevant parties whenever there is a change in the service status of an order 
+
+**🔢 Quantity with interval booking time**
+You can set quantity of transport with interval of booking time for that transport
+
 
 ## Available Addons:
 
@@ -205,28 +209,26 @@ This transparency is crucial for legal protection. By using this plugin, you ack
 
 
 == Changelog ==
-
+= 1.2.6 =
+1. Added dependency for pro version 
+2. Minor issues solved
+3. Driver panel improved
 = 1.2.5 =
 1. No transport available section can be changed Now
 2. Issue fixed with transport-result page slug
-
 = 1.2.4 =
 1. Documentation changed
-
 = 1.2.3 =
 1. Google calendar integration added
 2. Woocommerce order analytics added
 3. Rest Api documentation added
-
 = 1.2.2 = 
 1. Gutenberg block added for booking form
 2. Elementor widget added for booking form
-
 = 1.2.1 =
 1. Manual Pricing Slug is fixed
 2. Fixed Hourly Responsive issue Fixed
 3. KM to mile feature added
-
 = 1.2.0 =
 1. Geo Fence fixed and intercity with extra pricing added for pro version 
 2. Return Time and date added
