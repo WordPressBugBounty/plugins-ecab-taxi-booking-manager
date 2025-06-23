@@ -48,7 +48,8 @@
 			function load_get_details_page() {
 				if (isset($_POST['tab_id'])) {
 					$tab_id = sanitize_text_field($_POST['tab_id']); // Sanitize input
-			
+					$form_style = sanitize_text_field($_POST['form_style']);
+					$map = sanitize_text_field($_POST['map']); // Changed from $display_map to $map
 					// Include the correct template based on the tab
 					if ($tab_id === 'distance' || $tab_id === 'hourly' || $tab_id === 'flat-rate') {
 						ob_start(); // Start output buffering
@@ -68,6 +69,7 @@
 				wp_die(); // End AJAX call
 			}
 			public function get_mptbm_map_search_result() {
+				
 					$distance = isset($_COOKIE['mptbm_distance']) ? absint($_COOKIE['mptbm_distance']) : '';
 					$duration = isset($_COOKIE['mptbm_duration']) ? absint($_COOKIE['mptbm_duration']) : '';
 					// if ($distance && $duration) {

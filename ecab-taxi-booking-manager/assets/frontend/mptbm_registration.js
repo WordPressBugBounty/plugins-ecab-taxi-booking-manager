@@ -183,6 +183,13 @@ function mptbm_map_area_init() {
         if (mptbm_enable_return_in_different_date == 'yes' && two_way != 1 && price_based != 'fixed_hourly') {
             return_date = return_target_date.val();
             return_time = return_target_time.val();
+            // Fix for return_time conversion
+            let selectedReturnTimeElement = parent.find("#mptbm_map_return_time").closest(".mp_input_select").find("li[data-value='" + return_time + "']");
+            if (selectedReturnTimeElement.length) {
+                return_time = selectedReturnTimeElement.attr('data-time');
+                let [r_hours, r_minutes] = return_time.split('.');
+                return_time = parseFloat(r_hours) + (parseFloat(r_minutes) / 60);
+            }
         } else {
             return_date = start_date;
             return_time = 'Not applicable';
@@ -192,14 +199,12 @@ function mptbm_map_area_init() {
         let selectedTimeElement = parent.find("#mptbm_map_start_time").closest(".mp_input_select").find("li[data-value='" + start_time + "']");
         if (selectedTimeElement.length) {
             start_time = selectedTimeElement.attr('data-time');
-            // Convert the time to a proper format
-            let [hours, minutes] = start_time.split('.');
-            start_time = parseFloat(hours) + (parseFloat(minutes) / 100);
+            
         }
         
         if (!start_date) {
             target_date.trigger("click");
-        } else if (!start_time) {
+        } else if (start_time === undefined || start_time === null || start_time === '') {
             parent
                 .find("#mptbm_map_start_time")
                 .closest(".mp_input_select")
@@ -209,7 +214,7 @@ function mptbm_map_area_init() {
             if (mptbm_enable_return_in_different_date == 'yes' && two_way != 1) {
                 return_target_date.trigger("click");
             }
-        } else if (!return_time) {
+        } else if (return_time === undefined || return_time === null || return_time === '') {
             if (mptbm_enable_return_in_different_date == 'yes' && two_way != 1) {
                 parent
                     .find("#mptbm_map_return_time")
@@ -249,6 +254,7 @@ function mptbm_map_area_init() {
                 });
             }
             // Define a function to get the coordinates asynchronously and return a Deferred object
+            
             function getCoordinatesAsync(address) {
                 var deferred = $.Deferred();
                 getGeometryLocation(address, function (coordinates) {
@@ -262,7 +268,10 @@ function mptbm_map_area_init() {
                     getCoordinatesAsync(start_place.value),
                     getCoordinatesAsync(end_place.value)
                 ).done(function (startCoordinates, endCoordinates) {
-                    if (start_place.value && end_place.value && start_date && start_time && return_date && return_time) {
+                    if (start_place.value && end_place.value && start_date && 
+                        (start_time !== undefined && start_time !== null && start_time !== '') && 
+                        return_date && 
+                        (return_time !== undefined && return_time !== null && return_time !== '')) {
                         let actionValue;
                         if (!mptbm_enable_view_search_result_page) {
                             actionValue = "get_mptbm_map_search_result";
@@ -284,6 +293,8 @@ function mptbm_map_area_init() {
                                     return_date: return_date,
                                     return_time: return_time,
                                     mptbm_passengers: parent.find('#mptbm_passengers').val(),
+                                    mptbm_max_passenger: parent.find('#mptbm_max_passenger').val(),
+                                    mptbm_max_bag: parent.find('#mptbm_max_bag').val(),
                                 },
                                 beforeSend: function () {
                                     //dLoader(target);
@@ -295,6 +306,12 @@ function mptbm_map_area_init() {
                                         .done(function () {
                                             dLoaderRemove(parent.find(".tabsContentNext"));
                                             parent.find(".nextTab_next").trigger("click");
+                                            // iOS DOM reflow workaround
+                                            if (mptbm_is_ios()) {
+                                                target[0].style.display = 'none';
+                                                void target[0].offsetHeight;
+                                                target[0].style.display = '';
+                                            }
                                         });
                                 },
                                 error: function (response) {
@@ -322,6 +339,8 @@ function mptbm_map_area_init() {
                                     return_time: return_time,
                                     mptbm_enable_view_search_result_page: mptbm_enable_view_search_result_page,
                                     mptbm_passengers: parent.find('#mptbm_passengers').val(),
+                                    mptbm_max_passenger: parent.find('#mptbm_max_passenger').val(),
+                                    mptbm_max_bag: parent.find('#mptbm_max_bag').val(),
                                 },
                                 beforeSend: function () {
                                     dLoader(target);
@@ -339,7 +358,10 @@ function mptbm_map_area_init() {
                 });
             } else {
 
-                if (start_place.value && end_place.value && start_date && start_time && return_date && return_time) {
+                if (start_place.value && end_place.value && start_date && 
+                    (start_time !== undefined && start_time !== null && start_time !== '') && 
+                    return_date && 
+                    (return_time !== undefined && return_time !== null && return_time !== '')) {
 
                     let actionValue;
                     if (!mptbm_enable_view_search_result_page) {
@@ -360,6 +382,8 @@ function mptbm_map_area_init() {
                                 return_date: return_date,
                                 return_time: return_time,
                                 mptbm_passengers: parent.find('#mptbm_passengers').val(),
+                                mptbm_max_passenger: parent.find('#mptbm_max_passenger').val(),
+                                mptbm_max_bag: parent.find('#mptbm_max_bag').val(),
                             },
                             beforeSend: function () {
                                 //dLoader(target);
@@ -371,6 +395,12 @@ function mptbm_map_area_init() {
                                     .done(function () {
                                         dLoaderRemove(parent.find(".tabsContentNext"));
                                         parent.find(".nextTab_next").trigger("click");
+                                        // iOS DOM reflow workaround
+                                        if (mptbm_is_ios()) {
+                                            target[0].style.display = 'none';
+                                            void target[0].offsetHeight;
+                                            target[0].style.display = '';
+                                        }
                                     });
                             },
                             error: function (response) {
@@ -396,6 +426,8 @@ function mptbm_map_area_init() {
                                 return_time: return_time,
                                 mptbm_enable_view_search_result_page: mptbm_enable_view_search_result_page,
                                 mptbm_passengers: parent.find('#mptbm_passengers').val(),
+                                mptbm_max_passenger: parent.find('#mptbm_max_passenger').val(),
+                                mptbm_max_bag: parent.find('#mptbm_max_bag').val(),
                             },
                             beforeSend: function () {
                                 dLoader(target);
@@ -561,6 +593,12 @@ function mptbm_map_area_init() {
                             .promise()
                             .done(function () {
                                 dLoaderRemove(target.closest(".mptbm_search_area"));
+                                // iOS DOM reflow workaround
+                                if (mptbm_is_ios()) {
+                                    target[0].style.display = 'none';
+                                    void target[0].offsetHeight;
+                                    target[0].style.display = '';
+                                }
                             });
                     },
                     error: function (response) {
@@ -606,6 +644,21 @@ function mptbm_map_area_init() {
         }
     );
 })(jQuery);
+
+// Add this test to verify jQuery and event handlers are working
+jQuery(document).ready(function($) {
+    console.log('MPTBM Registration JS loaded - jQuery working');
+    
+    // Test if info buttons exist
+    setTimeout(function() {
+        var infoButtons = $('.mptbm-info-button');
+        console.log('Info buttons found:', infoButtons.length);
+        if (infoButtons.length > 0) {
+            console.log('Info buttons are present in DOM');
+        }
+    }, 1000);
+});
+
 function mptbm_content_refresh(parent) {
     parent.find('[name="mptbm_post_id"]').val("");
     parent.find(".mptbm_map_search_result").remove();
@@ -614,7 +667,6 @@ function mptbm_content_refresh(parent) {
 }
 //=======================//
 function mptbm_price_calculation(parent) {
-    
     let target_summary = parent.find(".mptbm_transport_summary");
     let total = 0;
     let post_id = parseInt(parent.find('[name="mptbm_post_id"]').val());
@@ -635,9 +687,12 @@ function mptbm_price_calculation(parent) {
             }
         });
     }
-    target_summary
-        .find(".mptbm_product_total_price")
-        .html(mp_price_format(total));
+    var el = target_summary.find(".mptbm_product_total_price");
+    el.html(mp_price_format(total));
+    // iOS DOM reflow workaround
+    if (mptbm_is_ios()) {
+        el.hide().show(0);
+    }
 }
 (function ($) {
     
@@ -664,9 +719,19 @@ function mptbm_price_calculation(parent) {
         var transportPrice = parseFloat($(`.mptbm_transport_select[data-post-id="${postId}"]`).attr('data-transport-price'));
         var $summary = $searchArea.find('.mptbm_transport_summary');
     
-        $summary.find('.mptbm_product_price').html(
-            'x' + updatedVal + ' <span style="color:#000;">|&nbsp;&nbsp;</span>' + mp_price_format(transportPrice * updatedVal)
-        );
+        // Check if there's a custom message
+        let customMessage = $parent.find('.mptbm-custom-price-message').html();
+        if (customMessage) {
+            // If there's a custom message, show it with quantity
+            $summary.find('.mptbm_product_price').html(
+                'x' + updatedVal + ' <span style="color:#000;">|&nbsp;&nbsp;</span>' + customMessage
+            );
+        } else {
+            // If no custom message, show price as before
+            $summary.find('.mptbm_product_price').html(
+                'x' + updatedVal + ' <span style="color:#000;">|&nbsp;&nbsp;</span>' + mp_price_format(transportPrice * updatedVal)
+            );
+        }
     
         // 🧠 Update the data-price dynamically if needed
         $searchArea.find('[name="mptbm_post_id"]').attr('data-price', transportPrice * updatedVal);
@@ -715,9 +780,21 @@ function mptbm_price_calculation(parent) {
                 target_summary.find('.mptbm_product_name').html(transport_name);
                 let quantityInput = parent.find(`.mp_quantity_input[data-post-id="${post_id}"]`);
                 let quantityVal = quantityInput.length ? parseInt(quantityInput.val()) || 1 : 1;
-                target_summary.find('.mptbm_product_price').html(
-                    'x' + quantityVal + ' <span style="color:#000;">|&nbsp;&nbsp;</span> ' + mp_price_format(transport_price * quantityVal)
-                );
+
+                // Check if there's a custom message
+                let customMessage = $this.closest('.mptbm_booking_item').find('.mptbm-custom-price-message').html();
+                if (customMessage) {
+                    // If there's a custom message, show it with quantity
+                    target_summary.find('.mptbm_product_price').html(
+                        'x' + quantityVal + ' <span style="color:#000;">|&nbsp;&nbsp;</span> ' + customMessage
+                    );
+                } else {
+                    // If no custom message, show price as before
+                    target_summary.find('.mptbm_product_price').html(
+                        'x' + quantityVal + ' <span style="color:#000;">|&nbsp;&nbsp;</span> ' + mp_price_format(transport_price * quantityVal)
+                    );
+                }
+
                 $this.addClass('active_select');
                 mp_all_content_change($this);
                 parent.find('[name="mptbm_post_id"]').val(post_id).attr('data-price', transport_price).promise().done(function () {
@@ -736,6 +813,12 @@ function mptbm_price_calculation(parent) {
                     success: function (data) {
                         target_extra_service.html(data);
                         checkAndToggleBookNowButton(parent);
+                        // iOS DOM reflow workaround
+                        if (mptbm_is_ios()) {
+                            target_extra_service[0].style.display = 'none';
+                            void target_extra_service[0].offsetHeight;
+                            target_extra_service[0].style.display = '';
+                        }
                     },
                     error: function (response) {
                         console.log(response);
@@ -762,6 +845,12 @@ function mptbm_price_calculation(parent) {
                                     parent.find('.mptbm_book_now[type="button"]').trigger('click');
                                 } else {
                                     checkAndToggleBookNowButton(parent);
+                                }
+                                // iOS DOM reflow workaround
+                                if (mptbm_is_ios()) {
+                                    target_extra_service_summary[0].style.display = 'none';
+                                    void target_extra_service_summary[0].offsetHeight;
+                                    target_extra_service_summary[0].style.display = '';
                                 }
                             });
                         },
@@ -905,6 +994,8 @@ function mptbm_price_calculation(parent) {
                     mptbm_extra_service: extra_service_name,
                     mptbm_extra_service_qty: extra_service_qty,
                     mptbm_passengers: parent.find('#mptbm_passengers').val(),
+                    mptbm_max_passenger: parent.find('#mptbm_max_passenger').val(),
+                    mptbm_max_bag: parent.find('#mptbm_max_bag').val(),
                 },
                 beforeSend: function () {
                     dLoader(parent.find('.tabsContentNext'));
@@ -930,6 +1021,12 @@ function mptbm_price_calculation(parent) {
                             }
                             dLoaderRemove(parent.find('.tabsContentNext'));
                             parent.find('.nextTab_next').trigger('click');
+                            // iOS DOM reflow workaround
+                            if (mptbm_is_ios()) {
+                                target_checkout[0].style.display = 'none';
+                                void target_checkout[0].offsetHeight;
+                                target_checkout[0].style.display = '';
+                            }
                         });
                     } else {
                         window.location.href = data;
@@ -979,21 +1076,25 @@ function mptbm_price_calculation(parent) {
         }
         $('.mptb-tabs li').click(function () {
             var tab_id = $(this).attr('mptbm-data-tab');
-
+            var form_style = $(this).attr('mptbm-data-form-style');
+            var map = $(this).attr('mptbm-data-map');
+            
             // Remove existing template before inserting the new one
             $('.mptb-tab-content').empty().removeClass('current');
             $('.mptbm-hide-gif').css('display', 'block');
             // Mark the clicked tab as active
             $('.mptb-tabs li').removeClass('current');
             $(this).addClass('current');
-
+            
             // AJAX call to load the template
             $.ajax({
                 type: "POST",
                 url: mp_ajax_url, // WordPress AJAX URL
                 data: {
                     action: "load_get_details_page",
-                    tab_id: tab_id
+                    tab_id: tab_id,
+                    form_style: form_style,
+                    map: map
                 },
                 beforeSend: function () {
                     $("#" + tab_id).html('<p>Loading...</p>'); // Show loading message
@@ -1011,8 +1112,57 @@ function mptbm_price_calculation(parent) {
         });
     });
 
+    // Handle extra info toggle functionality
+    $(document).on('click', '.mptbm-info-button', function(e) {
+        e.preventDefault();
+        e.stopPropagation();
+        
+        console.log('Info button clicked!'); // Debug log
+        
+        var $button = $(this);
+        var postId = $button.data('post-id');
+        var $vehicleWrapper = $button.closest('.mptbm-vehicle-wrapper');
+        var $content = $vehicleWrapper.find('.mptbm-extra-info-content[data-post-id="' + postId + '"]');
+        var $icon = $button.find('i');
+        
+        console.log('Post ID:', postId); // Debug log
+        console.log('Vehicle wrapper found:', $vehicleWrapper.length); // Debug log
+        console.log('Content found:', $content.length); // Debug log
+        
+        // Close other open info panels
+        $('.mptbm-extra-info-content').not($content).slideUp(200);
+        $('.mptbm-info-button').not($button).css('background', 'var(--color_theme)').find('i').removeClass('fa-times').addClass('fa-info');
+        
+        if ($content.length > 0) {
+            $content.slideToggle(300, function() {
+                if ($content.is(':visible')) {
+                    $button.css('background', '#dc3545'); // Red when open
+                    $icon.removeClass('fa-info').addClass('fa-times');
+                } else {
+                    $button.css('background', 'var(--color_theme)');
+                    $icon.removeClass('fa-times').addClass('fa-info');
+                }
+            });
+        } else {
+            console.log('No content found for post ID:', postId); // Debug log
+        }
+    });
+    
+    // Close info panels when clicking outside
+    $(document).on('click', function(e) {
+        if (!$(e.target).closest('.mptbm-button-container, .mptbm-extra-info-content').length) {
+            $('.mptbm-extra-info-content').slideUp(200);
+            $('.mptbm-info-button').css('background', 'var(--color_theme)').find('i').removeClass('fa-times').addClass('fa-info');
+        }
+    });
+
 }(jQuery));
+
 function gm_authFailure() {
     var warning = jQuery('.mptbm-map-warning').html();
     jQuery('#mptbm_map_area').html('<div class="mptbm-map-warning"><h6>' + warning + '</h6></div>');
+}
+// Utility: Detect iOS
+function mptbm_is_ios() {
+    return /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
 }

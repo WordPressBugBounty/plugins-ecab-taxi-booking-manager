@@ -17,8 +17,25 @@
 	$fixed_time = $fixed_time ?? '';
 	$return_date_time = $return_date_time ?? '';
 	$price_based = $price_based ?? '';
+	$post_id = $summary_post_id ?? '';
 	
+	// Get price display type and custom message if post_id is available
+	if ($post_id) {
+		$price_display_type = MP_Global_Function::get_post_info($post_id, 'mptbm_price_display_type', 'normal');
+		$custom_message = MP_Global_Function::get_post_info($post_id, 'mptbm_custom_price_message', '');
+	}
+	
+	// Check if summary should be shown in mobile
+	$show_summary_mobile = MP_Global_Function::get_settings('mptbm_general_settings', 'show_summary_mobile', 'yes');
+	$is_mobile = wp_is_mobile();
+	$show_summary = true;
+	
+	// Hide summary if it's mobile and setting is set to 'no'
+	if ($is_mobile && $show_summary_mobile === 'no') {
+		$show_summary = false;
+	}
 ?>
+	<?php if ($show_summary): ?>
 	<div class="leftSidebar">
 		<div class="">
 			<div class="mp_sticky_on_scroll">
@@ -54,6 +71,15 @@
 						<p class="_textLight_1 mptbm_map_end_place"><?php echo esc_html($end_place); ?></p>
 					<?php } ?>
 					
+					<?php if($price_based != 'manual'){ ?>
+						<div class="dividerL"></div>
+						<h6 class="_mB_xs"><?php esc_html_e('Total Distance', 'ecab-taxi-booking-manager'); ?></h6>
+						<p class="_textLight_1"><?php echo esc_html(isset($_COOKIE['mptbm_distance_text']) ? $_COOKIE['mptbm_distance_text'] : ''); ?></p>
+						<div class="dividerL"></div>
+						<h6 class="_mB_xs"><?php esc_html_e('Total Time', 'ecab-taxi-booking-manager'); ?></h6>
+						<p class="_textLight_1"><?php echo esc_html(isset($_COOKIE['mptbm_duration_text']) ? $_COOKIE['mptbm_duration_text'] : ''); ?></p>
+					<?php } ?>
+					
 					<?php if($two_way>1){ 
 						?>
 						<div class="dividerL"></div>
@@ -86,7 +112,11 @@
 								<span class="fas fa-check-square _textTheme_mR_xs"></span>
 								<span class="mptbm_product_name"></span>
 							</div>
-							<span class="mptbm_product_price _textTheme"></span>
+							<?php if (isset($price_display_type) && $price_display_type === 'custom_message' && !empty($custom_message)): ?>
+								<span class="mptbm_product_price _textTheme"><?php echo wp_kses_post($custom_message); ?></span>
+							<?php else: ?>
+								<span class="mptbm_product_price _textTheme"></span>
+							<?php endif; ?>
 						</div>
 						<div class="mptbm_extra_service_summary"></div>
 						<div class="dividerL"></div>
@@ -103,4 +133,5 @@
 			</div>
 		</div>
 	</div>
+	<?php endif; ?>
 <?php

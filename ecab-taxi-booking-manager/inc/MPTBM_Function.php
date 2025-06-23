@@ -237,86 +237,112 @@ if (!class_exists('MPTBM_Function')) {
 				return 0;
 			}
 
+			// Get price basis information
+			$price_based = MP_Global_Function::get_post_info($post_id, 'mptbm_price_based');
+			$original_price_based = get_transient('original_price_based');
+
+			// If original price basis is fixed_hourly but current price basis is distance, return false
+			if ($original_price_based === 'fixed_hourly' && $price_based === 'distance') {
+				return false;
+			}
+			
+			// Check if mptbm_distance_tier_enabled Distance Tier Pricing addon is active and apply tier pricing if available
+			$tier_price = false;
+			if (class_exists('MPTBM_Distance_Tier_Pricing')) {
+				$tier_price = MPTBM_Distance_Tier_Pricing::calculate_tier_price(
+					$post_id, $distance, $duration, $start_place, $destination_place, $waiting_time, $two_way, $fixed_time
+				);
+			}
+
 			$price = 0.0;  // Initialize price as a float
 
-			// Check if the session is active
-			if (session_status() !== PHP_SESSION_ACTIVE) {
-				// Start the session if it's not active
-				session_start();
-			}
-			$initial_price = (float) MP_Global_Function::get_post_info($post_id, 'mptbm_initial_price');
-			$min_price = (float) MP_Global_Function::get_post_info($post_id, 'mptbm_min_price');
-			$return_min_price = MP_Global_Function::get_post_info($post_id, 'mptbm_min_price_return');
-			$price_based = MP_Global_Function::get_post_info($post_id, 'mptbm_price_based');
+			// If tier price is available, use it as the base price
+			if ($tier_price !== false) {
+				$price = $tier_price;
+			} else {
+				// Check if the session is active
+				if (session_status() !== PHP_SESSION_ACTIVE) {
+					// Start the session if it's not active
+					session_start();
+				}
+				$initial_price = (float) MP_Global_Function::get_post_info($post_id, 'mptbm_initial_price');
+				$min_price = (float) MP_Global_Function::get_post_info($post_id, 'mptbm_min_price');
+				$return_min_price = MP_Global_Function::get_post_info($post_id, 'mptbm_min_price_return');
 
-			$original_price_based = get_transient('original_price_based');
-			$waiting_price = (float) MP_Global_Function::get_post_info($post_id, 'mptbm_waiting_price', 0) * (float) $waiting_time;
+				$waiting_price = (float) MP_Global_Function::get_post_info($post_id, 'mptbm_waiting_price', 0) * (float) $waiting_time;
 
-			if ($price_based == 'inclusive' && $original_price_based == 'dynamic') {
-				$hour_price = (float) MP_Global_Function::get_post_info($post_id, 'mptbm_hour_price');
-				$km_price = (float) MP_Global_Function::get_post_info($post_id, 'mptbm_km_price');
-				$price = $hour_price * ((float) $duration / 3600) + $km_price * ((float) $distance / 1000);
-			} elseif ($price_based == 'distance' && $original_price_based == 'dynamic') {
-				$km_price = (float) MP_Global_Function::get_post_info($post_id, 'mptbm_km_price');
-				$price = $km_price * ((float) $distance / 1000);
-			} elseif ($price_based == 'duration' && ($original_price_based == 'fixed_hourly' || $original_price_based == 'dynamic')) {
-				$hour_price = (float) MP_Global_Function::get_post_info($post_id, 'mptbm_hour_price');
-				$price = $hour_price * ((float) $duration / 3600);
-			} elseif ($price_based == 'distance_duration' && $original_price_based == 'dynamic') {
-				$hour_price = (float) MP_Global_Function::get_post_info($post_id, 'mptbm_hour_price');
-				$km_price = (float) MP_Global_Function::get_post_info($post_id, 'mptbm_km_price');
-				$price = $hour_price * ((float) $duration / 3600) + $km_price * ((float) $distance / 1000);
-			} elseif (($price_based == 'inclusive' || $price_based == 'fixed_hourly') && $original_price_based == 'fixed_hourly') {
-				$hour_price = (float) MP_Global_Function::get_post_info($post_id, 'mptbm_hour_price');
-				$price = $hour_price * (float) $fixed_time;
-			} elseif ((trim($price_based) == 'inclusive' || trim($price_based) == 'manual') && trim($original_price_based) == 'manual') {
-				$manual_prices = MP_Global_Function::get_post_info($post_id, 'mptbm_manual_price_info', []);
-				$term_prices = MP_Global_Function::get_post_info($post_id, 'mptbm_terms_price_info', []);
-				$manual_prices = array_merge($manual_prices, $term_prices);
+				if ($price_based == 'inclusive' && $original_price_based == 'dynamic') {
+					$hour_price = (float) MP_Global_Function::get_post_info($post_id, 'mptbm_hour_price');
+					$km_price = (float) MP_Global_Function::get_post_info($post_id, 'mptbm_km_price');
+					$price = $hour_price * ((float) $duration / 3600) + $km_price * ((float) $distance / 1000);
+				} elseif ($price_based == 'distance' && $original_price_based == 'dynamic') {
+					$km_price = (float) MP_Global_Function::get_post_info($post_id, 'mptbm_km_price');
+					$price = $km_price * ((float) $distance / 1000);
+				} elseif ($price_based == 'duration' && ($original_price_based == 'fixed_hourly' || $original_price_based == 'dynamic')) {
+					$hour_price = (float) MP_Global_Function::get_post_info($post_id, 'mptbm_hour_price');
+					$price = $hour_price * ((float) $duration / 3600);
+				} elseif ($price_based == 'distance_duration' && $original_price_based == 'dynamic') {
+					$hour_price = (float) MP_Global_Function::get_post_info($post_id, 'mptbm_hour_price');
+					$km_price = (float) MP_Global_Function::get_post_info($post_id, 'mptbm_km_price');
+					$price = $hour_price * ((float) $duration / 3600) + $km_price * ((float) $distance / 1000);
+				} elseif (($price_based == 'inclusive' || $price_based == 'fixed_hourly') && $original_price_based == 'fixed_hourly') {
+					$hour_price = (float) MP_Global_Function::get_post_info($post_id, 'mptbm_hour_price');
+					$price = $hour_price * (float) $fixed_time;
+				} elseif ($price_based == 'distance' && $original_price_based == 'fixed_hourly') {
+					$km_price = (float) MP_Global_Function::get_post_info($post_id, 'mptbm_km_price');
+					$price = $km_price * ((float) $distance / 1000);
+				}
+				elseif ((trim($price_based) == 'inclusive' || trim($price_based) == 'manual') && trim($original_price_based) == 'manual') {
+					$manual_prices = MP_Global_Function::get_post_info($post_id, 'mptbm_manual_price_info', []);
+					$term_prices = MP_Global_Function::get_post_info($post_id, 'mptbm_terms_price_info', []);
+					$manual_prices = array_merge($manual_prices, $term_prices);
 
-				if (sizeof($manual_prices) > 0) {
-					foreach ($manual_prices as $manual_price) {
-						$start_location = array_key_exists('start_location', $manual_price) ? $manual_price['start_location'] : '';
-						$end_location = array_key_exists('end_location', $manual_price) ? $manual_price['end_location'] : '';
-						if ($start_place == $start_location && $destination_place == $end_location) {
-							$price = (float) ($manual_price['price'] ?? 0);
+					if (sizeof($manual_prices) > 0) {
+						foreach ($manual_prices as $manual_price) {
+							$start_location = array_key_exists('start_location', $manual_price) ? $manual_price['start_location'] : '';
+							$end_location = array_key_exists('end_location', $manual_price) ? $manual_price['end_location'] : '';
+							if ($start_place == $start_location && $destination_place == $end_location) {
+								$price = (float) ($manual_price['price'] ?? 0);
+							}
 						}
+					}
+				}
+
+				if ($initial_price > 0) {
+					$price += $initial_price;
+				}
+
+				// Only apply minimum price if we're not in a fixed_hourly to distance conversion
+				if ($min_price > 0 && $min_price > $price && !($original_price_based == 'fixed_hourly' && $price_based == 'distance')) {
+					$price = $min_price;
+
+					if ($return_min_price > 0 && $two_way > 1) {
+						$price = $price + $return_min_price;
+					} elseif ($return_min_price == '' && $two_way > 1) {
+						$price = $price * 2;
+					}
+				} elseif ($two_way > 1) {
+					$price = $price * 2;
+				}
+				
+				if ($waiting_time > 0) {
+					$price += $waiting_price;
+				}
+
+				if ($two_way > 1) {
+					$return_discount = MP_Global_Function::get_post_info($post_id, 'mptbm_return_discount', 0);
+
+					if (is_string($return_discount) && strpos($return_discount, '%') !== false) {
+						$percentage = floatval(rtrim($return_discount, '%'));
+						$discount_amounts = ($percentage / 100) * $price;
+						$price -= $discount_amounts;
+					} elseif (is_numeric($return_discount)) {
+						$price -= (float)$return_discount;
 					}
 				}
 			}
 
-			if ($initial_price > 0) {
-				$price += $initial_price;
-			}
-
-			if ($min_price > 0 && $min_price > $price) {
-				$price = $min_price;
-
-				if ($return_min_price > 0 && $two_way > 1) {
-					$price = $price + $return_min_price;
-				} elseif ($return_min_price == '' && $two_way > 1) {
-					$price = $price * 2;
-				}
-			} elseif ($two_way > 1) {
-				$price = $price * 2;
-			}
-			
-			if ($waiting_time > 0) {
-				$price += $waiting_price;
-			}
-
-			if ($two_way > 1) {
-				$return_discount = MP_Global_Function::get_post_info($post_id, 'mptbm_return_discount', 0);
-
-				if (is_string($return_discount) && strpos($return_discount, '%') !== false) {
-					$percentage = floatval(rtrim($return_discount, '%'));
-					$discount_amounts = ($percentage / 100) * $price;
-					$price -= $discount_amounts;
-				} elseif (is_numeric($return_discount)) {
-					$price -= (float)$return_discount;
-				}
-			}
-
+			// Now apply datewise discount if addon is active
 			if (class_exists('MPTBM_Datewise_Discount_Addon')) {
 				$selected_start_date = get_transient('start_date_transient');
 				$selected_start_time = get_transient('start_time_schedule_transient');
@@ -578,6 +604,81 @@ if (!class_exists('MPTBM_Function')) {
 				}
 			}
 			return array_unique($all_location);
+		}
+		// Default ECAB Taxi Booking checkout fields
+		public static function get_default_checkout_fields() {
+			return [
+				'flight_no' => [
+					'label' => __('Flight No', 'ecab-taxi-booking-manager'),
+					'type' => 'text',
+					'required' => false,
+					'show' => true,
+					'placeholder' => __('Enter your flight number', 'ecab-taxi-booking-manager'),
+				],
+				'passport_no' => [
+					'label' => __('Passport No', 'ecab-taxi-booking-manager'),
+					'type' => 'text',
+					'required' => false,
+					'show' => true,
+					'placeholder' => __('Enter your passport number', 'ecab-taxi-booking-manager'),
+				],
+				'pickup_location' => [
+					'label' => __('Pickup Location', 'ecab-taxi-booking-manager'),
+					'type' => 'text',
+					'required' => true,
+					'show' => true,
+					'placeholder' => __('Enter pickup location', 'ecab-taxi-booking-manager'),
+				],
+				'dropoff_location' => [
+					'label' => __('Drop-off Location', 'ecab-taxi-booking-manager'),
+					'type' => 'text',
+					'required' => true,
+					'show' => true,
+					'placeholder' => __('Enter drop-off location', 'ecab-taxi-booking-manager'),
+				],
+				'pickup_datetime' => [
+					'label' => __('Pickup Date & Time', 'ecab-taxi-booking-manager'),
+					'type' => 'datetime-local',
+					'required' => true,
+					'show' => true,
+					'placeholder' => __('Select pickup date and time', 'ecab-taxi-booking-manager'),
+				],
+				'num_passengers' => [
+					'label' => __('Number of Passengers', 'ecab-taxi-booking-manager'),
+					'type' => 'number',
+					'required' => true,
+					'show' => true,
+					'placeholder' => __('Enter number of passengers', 'ecab-taxi-booking-manager'),
+				],
+				'luggage_details' => [
+					'label' => __('Luggage Details', 'ecab-taxi-booking-manager'),
+					'type' => 'text',
+					'required' => false,
+					'show' => true,
+					'placeholder' => __('Enter luggage details', 'ecab-taxi-booking-manager'),
+				],
+				'contact_phone' => [
+					'label' => __('Contact Phone', 'ecab-taxi-booking-manager'),
+					'type' => 'text',
+					'required' => true,
+					'show' => true,
+					'placeholder' => __('Enter contact phone', 'ecab-taxi-booking-manager'),
+				],
+				'special_instructions' => [
+					'label' => __('Special Instructions', 'ecab-taxi-booking-manager'),
+					'type' => 'textarea',
+					'required' => false,
+					'show' => true,
+					'placeholder' => __('Any special instructions?', 'ecab-taxi-booking-manager'),
+				],
+				'email_address' => [
+					'label' => __('Email Address', 'ecab-taxi-booking-manager'),
+					'type' => 'email',
+					'required' => true,
+					'show' => true,
+					'placeholder' => __('Enter your email address', 'ecab-taxi-booking-manager'),
+				],
+			];
 		}
 	}
 	new MPTBM_Function();

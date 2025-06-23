@@ -148,6 +148,26 @@ function mptbm_check_transport_area_geo_fence($post_id, $operation_area_id, $sta
                     document.cookie = selectorClass + '=' + selectorClass + ";path=/";
                 </script>
                 <?php session_write_close();
+            } elseif ($startInAreaOne == "true" && $endInAreaOne == "true") {
+                // Show transport when both start and end are in area one
+                ?>
+                <script>
+                    var post_id = <?php echo wp_json_encode($post_id); ?>;
+                    var selectorClass = `.mptbm_booking_item_${post_id}`;
+                    jQuery(selectorClass).removeClass('mptbm_booking_item_hidden');
+                    document.cookie = selectorClass + '=' + selectorClass + ";path=/";
+                </script>
+                <?php
+            } elseif ($startInAreaTwo == "true" && $endInAreaTwo == "true") {
+                // Show transport when both start and end are in area two
+                ?>
+                <script>
+                    var post_id = <?php echo wp_json_encode($post_id); ?>;
+                    var selectorClass = `.mptbm_booking_item_${post_id}`;
+                    jQuery(selectorClass).removeClass('mptbm_booking_item_hidden');
+                    document.cookie = selectorClass + '=' + selectorClass + ";path=/";
+                </script>
+                <?php
             }
         }
     }
@@ -306,8 +326,6 @@ $start_date = isset($_POST["start_date"]) ? sanitize_text_field($_POST["start_da
 $start_time_schedule = isset($_POST["start_time"]) ? sanitize_text_field($_POST["start_time"]) : "";
 $start_time = isset($_POST["start_time"]) ? sanitize_text_field($_POST["start_time"]) : "";
 
-$start_time = isset($_POST["start_time"]) ? sanitize_text_field($_POST["start_time"]) : "";
-
 // Define unique keys for each transient
 $transient_key_schedule = 'start_time_schedule_transient';
 $transient_key_date = 'start_date_transient';
@@ -343,7 +361,7 @@ if ($start_time !== "") {
                 
             
         }else {
-            $minutes = isset($decimal_part) ? (int) $decimal_part * 10 : 0; // Multiply by 10 to convert to minutes
+            $minutes = isset($decimal_part) ? (int) $decimal_part * 1 : 0; // Multiply by 10 to convert to minutes
         }
         
     } else {
@@ -354,7 +372,7 @@ if ($start_time !== "") {
     $hours = 0;
     $minutes = 0;
 }
-
+ 
 // Format hours and minutes
 $start_time_formatted = sprintf('%02d:%02d', $hours, $minutes);
 
@@ -425,6 +443,10 @@ foreach ($mptbm_all_transport_id as $key => $value) {
 }
 $mptbm_bags =  max($mptbm_bags);
 $mptbm_passengers = max($mptbm_passengers);
+
+$selected_max_passenger = isset($_POST['mptbm_max_passenger']) ? intval($_POST['mptbm_max_passenger']) : 0;
+$selected_max_bag = isset($_POST['mptbm_max_bag']) ? intval($_POST['mptbm_max_bag']) : 0;
+error_log('DEBUG: Selected max_passenger=' . $selected_max_passenger . ', max_bag=' . $selected_max_bag);
 ?>
 <div data-tabs-next="#mptbm_search_result" class="mptbm_map_search_result">
 	<input type="hidden" name="mptbm_post_id" value="" data-price="" />
@@ -488,10 +510,42 @@ if ($all_posts->found_posts > 0) {
     $vehicle_item_count = 0;
     foreach ($posts as $post) {
         $post_id = $post->ID;
+        $taxi_max_passenger = (int) get_post_meta($post_id, 'mptbm_maximum_passenger', true);
+        $taxi_max_bag = (int) get_post_meta($post_id, 'mptbm_maximum_bag', true);
+        // error_log('DEBUG: Taxi ' . $post_id . ' max_passenger=' . $taxi_max_passenger . ', max_bag=' . $taxi_max_bag);
+        if (
+            ($selected_max_passenger && $taxi_max_passenger < $selected_max_passenger) ||
+            ($selected_max_bag && $taxi_max_bag < $selected_max_bag)
+        ) {
+            // error_log('DEBUG: Taxi ' . $post_id . ' SKIPPED by filter');
+            continue; // Skip this taxi, it doesn't meet the filter
+        }
+        // error_log('DEBUG: Taxi ' . $post_id . ' INCLUDED');
         $check_schedule = wptbm_get_schedule($post_id, $days_name, $start_date,$start_time_schedule, $return_time_schedule, $start_place_coordinates, $end_place_coordinates, $price_based);
         
         if ($check_schedule) {
             $vehicle_item_count = $vehicle_item_count + 1;
+            $price_display_type = MP_Global_Function::get_post_info($post_id, 'mptbm_price_display_type', 'normal');
+            $custom_message = MP_Global_Function::get_post_info($post_id, 'mptbm_custom_price_message', '');
+            
+            // Get the price
+            $price = MPTBM_Function::get_price($post_id, $distance, $duration, $start_place, $end_place, $waiting_time, $two_way, $fixed_time);
+            
+            // Only skip display if price is 0 and we're not in zero or custom message mode
+            if (!$price && $price_display_type === 'normal') {
+                continue;
+            }
+            
+            // Handle price display
+            if ($price_display_type === 'custom_message' && $custom_message) {
+                $price_display = '<div class="mptbm-custom-price-message" style="font-size: 15px;">' . wp_kses_post($custom_message) . '</div>';
+                $raw_price = 0; // Set raw price to 0 for custom message
+            } else {
+                $wc_price = MP_Global_Function::wc_price($post_id, $price);
+                $raw_price = MP_Global_Function::price_convert_raw($wc_price);
+                $price_display = $wc_price;
+            }
+            
             include MPTBM_Function::template_path("registration/vehicle_item.php");
         }
     }
