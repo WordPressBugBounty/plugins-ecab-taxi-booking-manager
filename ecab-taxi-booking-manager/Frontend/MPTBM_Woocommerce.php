@@ -60,6 +60,43 @@ if (!class_exists('MPTBM_Woocommerce')) {
 				$waiting_time = isset($_POST['mptbm_waiting_time']) ? sanitize_text_field($_POST['mptbm_waiting_time']) : 0;
 				$return = isset($_POST['mptbm_taxi_return']) ? sanitize_text_field($_POST['mptbm_taxi_return']) : 1;
 				$fixed_hour = isset($_POST['mptbm_fixed_hours']) ? sanitize_text_field($_POST['mptbm_fixed_hours']) : 0;
+				
+				// Store date, time, and coordinates in transients for dynamic pricing
+				$booking_date = isset($_POST['mptbm_date']) ? sanitize_text_field($_POST['mptbm_date']) : '';
+				$booking_time = isset($_POST['mptbm_time']) ? sanitize_text_field($_POST['mptbm_time']) : '';
+				$pickup_lat = isset($_POST['pickup_lat']) ? sanitize_text_field($_POST['pickup_lat']) : '';
+				$pickup_lng = isset($_POST['pickup_lng']) ? sanitize_text_field($_POST['pickup_lng']) : '';
+				$drop_lat = isset($_POST['drop_lat']) ? sanitize_text_field($_POST['drop_lat']) : '';
+				$drop_lng = isset($_POST['drop_lng']) ? sanitize_text_field($_POST['drop_lng']) : '';
+				
+				if (!empty($booking_date)) {
+					set_transient('start_date_transient', $booking_date, HOUR_IN_SECONDS);
+				}
+				if (!empty($booking_time)) {
+					set_transient('start_time_schedule_transient', $booking_time, HOUR_IN_SECONDS);
+				}
+				if (!empty($pickup_lat) && !empty($pickup_lng)) {
+					set_transient('mptbm_pickup_lat', $pickup_lat, HOUR_IN_SECONDS);
+					set_transient('mptbm_pickup_lng', $pickup_lng, HOUR_IN_SECONDS);
+				}
+				if (!empty($drop_lat) && !empty($drop_lng)) {
+					set_transient('mptbm_drop_lat', $drop_lat, HOUR_IN_SECONDS);
+					set_transient('mptbm_drop_lng', $drop_lng, HOUR_IN_SECONDS);
+				}
+				
+				// Also store in session as backup
+				if (session_status() === PHP_SESSION_NONE) {
+					session_start();
+				}
+				if (!empty($pickup_lat) && !empty($pickup_lng)) {
+					$_SESSION['pickup_lat'] = $pickup_lat;
+					$_SESSION['pickup_lng'] = $pickup_lng;
+				}
+				if (!empty($drop_lat) && !empty($drop_lng)) {
+					$_SESSION['drop_lat'] = $drop_lat;
+					$_SESSION['drop_lng'] = $drop_lng;
+				}
+				
 				// Calculate single-unit transport price
 				$price = MPTBM_Function::get_price($post_id, $distance, $duration, $start_place, $end_place, $waiting_time, $return, $fixed_hour);
 				$wc_price = MP_Global_Function::wc_price($post_id, $price);
@@ -799,43 +836,33 @@ if (!class_exists('MPTBM_Woocommerce')) {
 		}
 		/****************************/
 		public function mptbm_add_to_cart()
-		{
-			$quantity = isset($_POST['transport_quantity']) ? sanitize_text_field($_POST['transport_quantity']) : 1;
-			$link_id = absint($_POST['link_id']);
-			$product_id = apply_filters('woocommerce_add_to_cart_product_id', $link_id);
-			$passed_validation = apply_filters('woocommerce_add_to_cart_validation', true, $product_id, $quantity);
-			$product_status = get_post_status($product_id);
+			{
+				$quantity = isset($_POST['transport_quantity']) ? sanitize_text_field($_POST['transport_quantity']) : 1;
+				$link_id = absint($_POST['link_id']);
+				$product_id = apply_filters('woocommerce_add_to_cart_product_id', $link_id);
+				$passed_validation = apply_filters('woocommerce_add_to_cart_validation', true, $product_id, $quantity);
+				$product_status = get_post_status($product_id);
 
-			// Prevent multiple taxi bookings in the cart
-			foreach (WC()->cart->get_cart() as $cart_item) {
-				$post_id = isset($cart_item['mptbm_id']) ? $cart_item['mptbm_id'] : 0;
-				if ($post_id && get_post_type($post_id) === 'mptbm_booking') {
-					wc_add_notice(__('You can only add one taxi booking per order.', 'ecab-taxi-booking-manager'), 'error');
-					// If AJAX, return error and exit
-					if (defined('DOING_AJAX') && DOING_AJAX) {
-						wp_send_json_error(['error' => 'taxi_already_in_cart']);
-					}
-					return;
-				}
-			}
+				// Remove all previous items from cart
+				WC()->cart->empty_cart();
 
-			ob_start();
-			if ($passed_validation && WC()->cart->add_to_cart($product_id, $quantity) && 'publish' === $product_status) {
-				$checkout_system = MP_Global_Function::get_settings('mptbm_general_settings', 'single_page_checkout', 'yes');
-				if ($checkout_system == 'yes') {
-					echo wc_get_checkout_url();
-				} else {
+				ob_start();
+				if ($passed_validation && WC()->cart->add_to_cart($product_id, $quantity) && 'publish' === $product_status) {
+					$checkout_system = MP_Global_Function::get_settings('mptbm_general_settings', 'single_page_checkout', 'yes');
+					if ($checkout_system == 'yes') {
+						echo wc_get_checkout_url();
+					} else {
 			?>
-					<div class="dLayout woocommerce-page">
-						<?php echo do_shortcode('[woocommerce_checkout]'); ?>
-						<?php //do_action('woocommerce_ajax_checkout'); ?>
-					</div>
-<?php
+						<div class="dLayout woocommerce-page">
+							<?php echo do_shortcode('[woocommerce_checkout]'); ?>
+						</div>
+			<?php
+					}
 				}
+				echo ob_get_clean();
+				die();
 			}
-			echo ob_get_clean();
-			die();
-		}
+
 		/**
 		 * Override order-item quantity HTML with transport quantity meta.
 		 *

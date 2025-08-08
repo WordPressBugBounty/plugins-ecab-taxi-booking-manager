@@ -372,7 +372,7 @@ if ($start_time !== "") {
     $hours = 0;
     $minutes = 0;
 }
- 
+
 // Format hours and minutes
 $start_time_formatted = sprintf('%02d:%02d', $hours, $minutes);
 
@@ -384,9 +384,48 @@ if ($date && $start_time !== "") {
 }
 
 $start_place = isset($_POST["start_place"]) ? sanitize_text_field($_POST["start_place"]) : "";
-$start_place_coordinates = $_POST["start_place_coordinates"];
-$end_place_coordinates = $_POST["end_place_coordinates"];
+$start_place_coordinates = isset($_POST["start_place_coordinates"]) ? $_POST["start_place_coordinates"] : "";
+$end_place_coordinates = isset($_POST["end_place_coordinates"]) ? $_POST["end_place_coordinates"] : "";
 $end_place = isset($_POST["end_place"]) ? sanitize_text_field($_POST["end_place"]) : "";
+
+
+
+// Parse and store coordinates for weather and traffic pricing
+if (!empty($start_place_coordinates)) {
+    // Handle both array and JSON string formats
+    if (is_array($start_place_coordinates)) {
+        $start_coords = $start_place_coordinates;
+    } else {
+        $start_coords = json_decode($start_place_coordinates, true);
+    }
+    
+    if (is_array($start_coords) && ((isset($start_coords['lat']) && isset($start_coords['lng'])) || (isset($start_coords['latitude']) && isset($start_coords['longitude'])))) {
+        // Handle both lat/lng and latitude/longitude formats
+        $lat = isset($start_coords['lat']) ? $start_coords['lat'] : $start_coords['latitude'];
+        $lng = isset($start_coords['lng']) ? $start_coords['lng'] : $start_coords['longitude'];
+        
+        set_transient('pickup_lat_transient', floatval($lat), HOUR_IN_SECONDS);
+        set_transient('pickup_lng_transient', floatval($lng), HOUR_IN_SECONDS);
+    }
+}
+
+if (!empty($end_place_coordinates)) {
+    // Handle both array and JSON string formats
+    if (is_array($end_place_coordinates)) {
+        $end_coords = $end_place_coordinates;
+    } else {
+        $end_coords = json_decode($end_place_coordinates, true);
+    }
+    
+    if (is_array($end_coords) && ((isset($end_coords['lat']) && isset($end_coords['lng'])) || (isset($end_coords['latitude']) && isset($end_coords['longitude'])))) {
+        // Handle both lat/lng and latitude/longitude formats
+        $lat = isset($end_coords['lat']) ? $end_coords['lat'] : $end_coords['latitude'];
+        $lng = isset($end_coords['lng']) ? $end_coords['lng'] : $end_coords['longitude'];
+        
+        set_transient('drop_lat_transient', floatval($lat), HOUR_IN_SECONDS);
+        set_transient('drop_lng_transient', floatval($lng), HOUR_IN_SECONDS);
+    }
+}
 $two_way = isset($_POST["two_way"]) ? absint($_POST["two_way"]) : 1;
 $waiting_time = isset($_POST["waiting_time"]) ? sanitize_text_field($_POST["waiting_time"]) : 0;
 $fixed_time = isset($_POST["fixed_time"]) ? sanitize_text_field($_POST["fixed_time"]) : "";
@@ -396,21 +435,28 @@ $price_based = sanitize_text_field($_POST["price_based"]);
 if ($two_way > 1 && MP_Global_Function::get_settings("mptbm_general_settings", "enable_return_in_different_date") == "yes") {
     $return_date = isset($_POST["return_date"]) ? sanitize_text_field($_POST["return_date"]) : "";
     $return_time = isset($_POST["return_time"]) ? sanitize_text_field($_POST["return_time"]): "";
+    
     $return_time_schedule = isset($_POST["return_time"]) ? sanitize_text_field($_POST["return_time"]) : "";
-
+    
     if ($return_time !== "") {
         if ($return_time !== "0") {
-            // Convert start time to hours and minutes
+    
+            // Convert return time to hours and minutes
             $time_parts = explode('.', $return_time);
             $hours = isset($time_parts[0]) ? $time_parts[0] : 0;
             $decimal_part = isset($time_parts[1]) ? $time_parts[1] : 0;
             $interval_time = MPTBM_Function::get_general_settings('mptbm_pickup_interval_time');
+    
             if ($interval_time == "5" || $interval_time == "15") {
+                if ($decimal_part != 3) {
+                    $minutes = isset($decimal_part) ? (int) $decimal_part * 1 : 0; // Multiply by 1 to convert to minutes
+                } else {
+                    $minutes = isset($decimal_part) ? (int) $decimal_part * 10 : 0; // Multiply by 10 to convert to minutes
+                }
+            } else {
                 $minutes = isset($decimal_part) ? (int) $decimal_part * 1 : 0; // Multiply by 1 to convert to minutes
-            }else {
-                $minutes = isset($decimal_part) ? (int) $decimal_part * 10 : 0; // Multiply by 10 to convert to minutes
             }
-            
+    
         } else {
             $hours = 0;
             $minutes = 0;
@@ -419,9 +465,9 @@ if ($two_way > 1 && MP_Global_Function::get_settings("mptbm_general_settings", "
         $hours = 0;
         $minutes = 0;
     }
-    
     // Format hours and minutes
     $return_time_formatted = sprintf('%02d:%02d', $hours, $minutes);
+    
     
     // Combine date and time if both are available
     $return_date_time = $return_date ? gmdate("Y-m-d", strtotime($return_date)) : "";
