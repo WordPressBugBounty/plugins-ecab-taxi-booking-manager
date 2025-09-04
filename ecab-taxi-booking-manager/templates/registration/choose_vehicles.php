@@ -6,6 +6,20 @@
 if (!defined("ABSPATH")) {
     die();
 } // Cannot access pages directly
+
+// Clear only pricing-related cache to ensure fresh pricing on transport result page
+$current_page_template = get_page_template_slug();
+$is_transport_result_page = ($current_page_template === 'transport_result.php') || 
+                           (isset($_SERVER['REQUEST_URI']) && strpos($_SERVER['REQUEST_URI'], 'transport-result') !== false);
+
+if ($is_transport_result_page) {
+    // Clear only pricing-specific caches, not essential search data
+    global $wpdb;
+    $wpdb->query("DELETE FROM {$wpdb->options} WHERE option_name LIKE '_transient_weather_pricing_%'");
+    $wpdb->query("DELETE FROM {$wpdb->options} WHERE option_name LIKE '_transient_traffic_data_%'");
+    $wpdb->query("DELETE FROM {$wpdb->options} WHERE option_name LIKE '_transient_timeout_weather_pricing_%'");
+    $wpdb->query("DELETE FROM {$wpdb->options} WHERE option_name LIKE '_transient_timeout_traffic_data_%'");
+}
 $label = MPTBM_Function::get_name();
 $days = MP_Global_Function::week_day();
 $days_name = array_keys($days);
@@ -43,6 +57,57 @@ function mptbm_check_transport_area_geo_fence($post_id, $operation_area_id, $sta
             }
         </script>
         <?php
+    } else if ($operation_area_type === "geo-matched-operation-area-type") {
+        $flat_operation_area_coordinates = get_post_meta($operation_area_id, "mptbm-coordinates-three", true);
+        if (!is_array($flat_operation_area_coordinates)) {
+            return;
+        }
+        $operation_area_coordinates = [];
+        for ($i = 0; $i < count($flat_operation_area_coordinates); $i += 2) {
+            $operation_area_coordinates[] = ["latitude" => $flat_operation_area_coordinates[$i], "longitude" => $flat_operation_area_coordinates[$i + 1]];
+        }
+        ?>
+        <script>
+            var operation_area_coordinates = <?php echo wp_json_encode($operation_area_coordinates); ?>;
+            var post_id = <?php echo wp_json_encode($post_id); ?>;
+            var start_place_coordinates = <?php echo wp_json_encode($start_place_coordinates); ?>;
+            var end_place_coordinates = <?php echo wp_json_encode($end_place_coordinates); ?>;
+            var startInArea = geolib.isPointInPolygon(start_place_coordinates, operation_area_coordinates);
+            var endInArea = geolib.isPointInPolygon(end_place_coordinates, operation_area_coordinates);
+            // For debugging, output to console
+            console.log('Geo-matched debug: post_id', post_id, 'startInArea', startInArea, 'endInArea', endInArea, 'start', start_place_coordinates, 'end', end_place_coordinates, 'polygon', operation_area_coordinates);
+            if (startInArea || endInArea) {
+                var selectorClass = `.mptbm_booking_item_${post_id}`;
+                jQuery(selectorClass).removeClass('mptbm_booking_item_hidden');
+                document.cookie = selectorClass + '=' + selectorClass + ";path=/";
+            }
+        </script>
+        <?php
+        // PHP-side: try to check if pickup or dropoff is inside polygon for logging
+        function pointInPolygon($point, $polygon) {
+            $x = $point['latitude'];
+            $y = $point['longitude'];
+            $inside = false;
+            $n = count($polygon);
+            for ($i = 0, $j = $n - 1; $i < $n; $j = $i++) {
+                $xi = $polygon[$i]['latitude'];
+                $yi = $polygon[$i]['longitude'];
+                $xj = $polygon[$j]['latitude'];
+                $yj = $polygon[$j]['longitude'];
+                $intersect = (($yi > $y) != ($yj > $y)) &&
+                    ($x < ($xj - $xi) * ($y - $yi) / ($yj - $yi + 0.0000001) + $xi);
+                if ($intersect) $inside = !$inside;
+            }
+            return $inside;
+        }
+        $php_start_in_area = false;
+        $php_end_in_area = false;
+        if (is_array($start_place_coordinates) && isset($start_place_coordinates['latitude']) && isset($start_place_coordinates['longitude'])) {
+            $php_start_in_area = pointInPolygon($start_place_coordinates, $operation_area_coordinates);
+        }
+        if (is_array($end_place_coordinates) && isset($end_place_coordinates['latitude']) && isset($end_place_coordinates['longitude'])) {
+            $php_end_in_area = pointInPolygon($end_place_coordinates, $operation_area_coordinates);
+        }
     } else {
         $flat_operation_area_coordinates_one = get_post_meta($operation_area_id, "mptbm-coordinates-one", true);
         $flat_operation_area_coordinates_two = get_post_meta($operation_area_id, "mptbm-coordinates-two", true);
@@ -189,6 +254,8 @@ function wptbm_get_schedule($post_id, $days_name, $selected_day,$start_time_sche
     session_write_close();
     //Get operation area id
     $operation_area_ids = get_post_meta($post_id, "mptbm_selected_operation_areas", true);
+
+    
     
     //Schedule array
     $schedule = [];
@@ -197,9 +264,54 @@ function wptbm_get_schedule($post_id, $days_name, $selected_day,$start_time_sche
         // Handle multiple operation areas
         if (is_array($operation_area_ids)) {
             $is_in_any_area = false;
+            $transport_operation_type = get_post_meta($post_id, 'mptbm_operation_area_type', true);
             foreach ($operation_area_ids as $operation_area_id) {
                 $operation_area_type = get_post_meta($operation_area_id, "mptbm-operation-type", true);
-                if ($operation_area_type === "geo-fence-operation-area-type") {
+                if ($transport_operation_type === "geo-matched-operation-area-type") {
+                    // Geo-matched logic: show if either pickup or dropoff is in the area
+                    $flat_operation_area_coordinates = get_post_meta($operation_area_id, "mptbm-coordinates-three", true);
+                    if (is_array($flat_operation_area_coordinates)) {
+                        $operation_area_coordinates = [];
+                        for ($i = 0; $i < count($flat_operation_area_coordinates); $i += 2) {
+                            $operation_area_coordinates[] = ["latitude" => $flat_operation_area_coordinates[$i], "longitude" => $flat_operation_area_coordinates[$i + 1]];
+                        }
+                        // PHP-side: try to check if pickup or dropoff is inside polygon for logging
+                        function pointInPolygon($point, $polygon) {
+                            $x = $point['latitude'];
+                            $y = $point['longitude'];
+                            $inside = false;
+                            $n = count($polygon);
+                            for ($i = 0, $j = $n - 1; $i < $n; $j = $i++) {
+                                $xi = $polygon[$i]['latitude'];
+                                $yi = $polygon[$i]['longitude'];
+                                $xj = $polygon[$j]['latitude'];
+                                $yj = $polygon[$j]['longitude'];
+                                $intersect = (($yi > $y) != ($yj > $y)) &&
+                                    ($x < ($xj - $xi) * ($y - $yi) / ($yj - $yi + 0.0000001) + $xi);
+                                if ($intersect) $inside = !$inside;
+                            }
+                            return $inside;
+                        }
+                        $php_start_in_area = false;
+                        $php_end_in_area = false;
+                        if (is_array($start_place_coordinates) && isset($start_place_coordinates['latitude']) && isset($start_place_coordinates['longitude'])) {
+                            $php_start_in_area = pointInPolygon($start_place_coordinates, $operation_area_coordinates);
+                        }
+                        if (is_array($end_place_coordinates) && isset($end_place_coordinates['latitude']) && isset($end_place_coordinates['longitude'])) {
+                            $php_end_in_area = pointInPolygon($end_place_coordinates, $operation_area_coordinates);
+                        }
+                        if ($php_start_in_area || $php_end_in_area) {
+                            $is_in_any_area = true;
+                            ?>
+                            <script>
+                                var selectorClass = `.mptbm_booking_item_<?php echo $post_id; ?>`;
+                                jQuery(selectorClass).removeClass('mptbm_booking_item_hidden');
+                                document.cookie = selectorClass + '=' + selectorClass + ";path=/";
+                            </script>
+                            <?php
+                        }
+                    }
+                } elseif ($operation_area_type === "geo-fence-operation-area-type") {
                     mptbm_check_transport_area_geo_fence($post_id, $operation_area_id, $start_place_coordinates, $end_place_coordinates);
                     $is_in_any_area = true;
                 } else {
@@ -387,6 +499,7 @@ $start_place = isset($_POST["start_place"]) ? sanitize_text_field($_POST["start_
 $start_place_coordinates = isset($_POST["start_place_coordinates"]) ? $_POST["start_place_coordinates"] : "";
 $end_place_coordinates = isset($_POST["end_place_coordinates"]) ? $_POST["end_place_coordinates"] : "";
 $end_place = isset($_POST["end_place"]) ? sanitize_text_field($_POST["end_place"]) : "";
+$mptbm_original_price_base = isset($_POST["mptbm_original_price_base"]) ? sanitize_text_field($_POST["mptbm_original_price_base"]) : "";
 
 
 
@@ -475,6 +588,7 @@ if ($two_way > 1 && MP_Global_Function::get_settings("mptbm_general_settings", "
         $return_date_time .= " " . $return_time_formatted;
     }
 
+    
 }
 if (MP_Global_Function::get_settings("mptbm_general_settings", "enable_filter_via_features") == "yes") {
     $feature_passenger_number = isset($_POST["feature_passenger_number"]) ? sanitize_text_field($_POST["feature_passenger_number"]) : "";
@@ -492,7 +606,18 @@ $mptbm_passengers = max($mptbm_passengers);
 
 $selected_max_passenger = isset($_POST['mptbm_max_passenger']) ? intval($_POST['mptbm_max_passenger']) : 0;
 $selected_max_bag = isset($_POST['mptbm_max_bag']) ? intval($_POST['mptbm_max_bag']) : 0;
-error_log('DEBUG: Selected max_passenger=' . $selected_max_passenger . ', max_bag=' . $selected_max_bag);
+
+// Get distance and duration from cookies for price calculation
+$distance = isset($_COOKIE['mptbm_distance']) ? absint($_COOKIE['mptbm_distance']) : '';
+$duration = isset($_COOKIE['mptbm_duration']) ? absint($_COOKIE['mptbm_duration']) : '';
+
+// Fallback values for object caching compatibility
+if (empty($distance)) {
+    $distance = 1000; // Default 1km in meters
+}
+if (empty($duration)) {
+    $duration = 3600; // Default 1 hour in seconds
+}
 ?>
 <div data-tabs-next="#mptbm_search_result" class="mptbm_map_search_result">
 	<input type="hidden" name="mptbm_post_id" value="" data-price="" />
@@ -500,6 +625,7 @@ error_log('DEBUG: Selected max_passenger=' . $selected_max_passenger . ', max_ba
 	<input type="hidden" name="mptbm_end_place" value="<?php echo esc_attr($end_place); ?>" />
 	<input type="hidden" name="mptbm_date" value="<?php echo esc_attr($date); ?>" />
 	<input type="hidden" name="mptbm_taxi_return" value="<?php echo esc_attr($two_way); ?>" />
+	<input type="hidden" name="mptbm_original_price_base" value="<?php echo esc_attr($mptbm_original_price_base); ?>" />
 	<?php if ($two_way > 1 && MP_Global_Function::get_settings("mptbm_general_settings", "enable_return_in_different_date") == "yes") { ?>
 				<input type="hidden" name="mptbm_map_return_date" id="mptbm_map_return_date" value="<?php echo esc_attr($return_date); ?>" />
 				<input type="hidden" name="mptbm_map_return_time" id="mptbm_map_return_time" value="<?php echo esc_attr($return_time); ?>" />
@@ -549,13 +675,18 @@ error_log('DEBUG: Selected max_passenger=' . $selected_max_passenger . ', max_ba
 				<!-- Filter area end -->
 					<?php
 
+error_log('MPTBM DEBUG: About to query transport list with price_based: ' . $price_based);
 $all_posts = MPTBM_Query::query_transport_list($price_based);
+
+error_log('MPTBM DEBUG: Found ' . $all_posts->found_posts . ' total posts');
  
 if ($all_posts->found_posts > 0) {
     $posts = $all_posts->posts;
     $vehicle_item_count = 0;
+    error_log('MPTBM DEBUG: Processing ' . count($posts) . ' vehicles');
     foreach ($posts as $post) {
         $post_id = $post->ID;
+        error_log('MPTBM DEBUG: Processing vehicle ID: ' . $post_id);
         $taxi_max_passenger = (int) get_post_meta($post_id, 'mptbm_maximum_passenger', true);
         $taxi_max_bag = (int) get_post_meta($post_id, 'mptbm_maximum_bag', true);
         // error_log('DEBUG: Taxi ' . $post_id . ' max_passenger=' . $taxi_max_passenger . ', max_bag=' . $taxi_max_bag);
@@ -563,22 +694,28 @@ if ($all_posts->found_posts > 0) {
             ($selected_max_passenger && $taxi_max_passenger < $selected_max_passenger) ||
             ($selected_max_bag && $taxi_max_bag < $selected_max_bag)
         ) {
-            // error_log('DEBUG: Taxi ' . $post_id . ' SKIPPED by filter');
+            error_log('MPTBM DEBUG: Vehicle ' . $post_id . ' SKIPPED by filter - passenger/bag requirements not met');
             continue; // Skip this taxi, it doesn't meet the filter
         }
-        // error_log('DEBUG: Taxi ' . $post_id . ' INCLUDED');
+        
         $check_schedule = wptbm_get_schedule($post_id, $days_name, $start_date,$start_time_schedule, $return_time_schedule, $start_place_coordinates, $end_place_coordinates, $price_based);
+        error_log('MPTBM DEBUG: Vehicle ' . $post_id . ' schedule check result: ' . ($check_schedule ? 'PASSED' : 'FAILED'));
         
         if ($check_schedule) {
             $vehicle_item_count = $vehicle_item_count + 1;
             $price_display_type = MP_Global_Function::get_post_info($post_id, 'mptbm_price_display_type', 'normal');
             $custom_message = MP_Global_Function::get_post_info($post_id, 'mptbm_custom_price_message', '');
             
+            error_log('MPTBM DEBUG: Vehicle ' . $post_id . ' - Getting price with distance: ' . $distance . ', duration: ' . $duration . ', start: ' . $start_place . ', end: ' . $end_place);
+            
             // Get the price
             $price = MPTBM_Function::get_price($post_id, $distance, $duration, $start_place, $end_place, $waiting_time, $two_way, $fixed_time);
             
+            error_log('MPTBM DEBUG: Vehicle ' . $post_id . ' calculated price: ' . $price . ', display_type: ' . $price_display_type);
+            
             // Only skip display if price is 0 and we're not in zero or custom message mode
             if (!$price && $price_display_type === 'normal') {
+                error_log('MPTBM DEBUG: Vehicle ' . $post_id . ' SKIPPED - price is 0 and display type is normal');
                 continue;
             }
             
@@ -592,9 +729,13 @@ if ($all_posts->found_posts > 0) {
                 $price_display = $wc_price;
             }
             
+            error_log('MPTBM DEBUG: Vehicle ' . $post_id . ' INCLUDED - raw_price: ' . $raw_price . ', price_display: ' . strip_tags($price_display));
+            
             include MPTBM_Function::template_path("registration/vehicle_item.php");
         }
     }
+    
+    error_log('MPTBM DEBUG: Total vehicles processed: ' . count($posts) . ', Total included: ' . $vehicle_item_count);
 } else {
 ?>
 						<div class="_dLayout_mT_bgWarning">
