@@ -30,7 +30,7 @@ if (!class_exists('MPTBM_Settings_Global')) {
 ?>
 			<div class="mpStyle mp_global_settings">
 				<div class="mpPanel">
-					<div class="mpPanelHeader"><?php echo esc_html(esc_html__('Settings', 'ecab-taxi-booking-manager')); ?></div>
+					<div class="mpPanelHeader"><?php echo esc_html__('Settings', 'ecab-taxi-booking-manager'); ?></div>
 					<div class="mpPanelBody mp_zero">
 						<div class="mpTabs leftTabs">
 							<?php $this->settings_api->show_navigation(); ?>
@@ -66,21 +66,21 @@ if (!class_exists('MPTBM_Settings_Global')) {
 			$sections = array(
 				array(
 					'id' => 'mptbm_map_api_settings',
-					'icon' => 'fab fa-google',
-					'title' => esc_html__('Google Map API Settings', 'ecab-taxi-booking-manager')
+					'icon' => 'fa fa-map',
+					'title' => esc_html__('Map API Settings', 'ecab-taxi-booking-manager')
 				),
 				array(
 					'id' => 'mptbm_general_settings',
-					'icon' => 'fas fa-sliders-h',
+					'icon' => 'fas fa-car-alt',
 					'title' => $label . ' ' . esc_html__('Settings', 'ecab-taxi-booking-manager')
 				),
-				array(
-					'id' => 'mptbm_translations',
-					'icon' => 'fas fa-language',
-					'title' => esc_html__('Translations', 'ecab-taxi-booking-manager')
-				),
-				
-			);
+			array(
+				'id' => 'mptbm_rest_api_settings',
+				'icon' => 'fas fa-code',
+				'title' => esc_html__('REST API Settings', 'ecab-taxi-booking-manager')
+			),
+			
+		);
 			
 			// Add QR Code Settings section only if QR Addon class exists
 			if (class_exists('Ecab_Taxi_Booking_QR_Addon')) {
@@ -368,13 +368,15 @@ if (!class_exists('MPTBM_Settings_Global')) {
 				'mptbm_map_api_settings' => apply_filters('filter_mptbm_map_api_settings', array(
 					array(
 						'name' => 'display_map',
-						'label' => esc_html__('Pricing system based on google map', 'ecab-taxi-booking-manager'),
-						'desc' => esc_html__('If you want to disable Pricing system based on google map, please select Without google map. default Google map', 'ecab-taxi-booking-manager'),
+						'label' => esc_html__('Pricing system based on  map', 'ecab-taxi-booking-manager'),
+						'desc' => esc_html__('If you want to disable Pricing system based on  map, please select Without map. default openstreet map', 'ecab-taxi-booking-manager'),
 						'type' => 'select',
-						'default' => 'enable',
+						'default' => 'openstreetmap',
 						'options' => array(
 							'enable' => esc_html__('Google map', 'ecab-taxi-booking-manager'),
-							'disable' => esc_html__('Without google map', 'ecab-taxi-booking-manager')
+							'openstreetmap' => esc_html__('Openstreetmap', 'ecab-taxi-booking-manager'),
+							'disable' => esc_html__('Without map api', 'ecab-taxi-booking-manager'),
+
 						)
 					),
 					array(
@@ -418,54 +420,117 @@ if (!class_exists('MPTBM_Settings_Global')) {
 						)
 					)
 				)),
-				'mptbm_translations' => apply_filters('filter_mptbm_translations', array(
-					array('name' => 'enter_ride_details_label', 'label' => esc_html__('Step 1: Enter Ride Details (Stepper Tab)', 'ecab-taxi-booking-manager'), 'type' => 'text', 'default' => 'Enter Ride Details'),
-					array('name' => 'choose_a_vehicle_label', 'label' => esc_html__('Step 2: Choose a Vehicle (Stepper Tab)', 'ecab-taxi-booking-manager'), 'type' => 'text', 'default' => 'Choose a vehicle'),
-					array('name' => 'place_order_label', 'label' => esc_html__('Step 3: Place Order (Stepper Tab)', 'ecab-taxi-booking-manager'), 'type' => 'text', 'default' => 'Place Order'),
-					array('name' => 'distance_tab_label', 'label' => esc_html__('Booking Tab: Distance', 'ecab-taxi-booking-manager'), 'type' => 'text', 'default' => 'Distance'),
-					array('name' => 'hourly_tab_label', 'label' => esc_html__('Booking Tab: Hourly', 'ecab-taxi-booking-manager'), 'type' => 'text', 'default' => 'Hourly'),
-					array('name' => 'flat_rate_tab_label', 'label' => esc_html__('Booking Tab: Flat rate', 'ecab-taxi-booking-manager'), 'type' => 'text', 'default' => 'Flat rate'),
-					array('name' => 'pickup_date_label', 'label' => esc_html__('Pickup Date Label', 'ecab-taxi-booking-manager'), 'type' => 'text', 'default' => 'Pickup Date'),
-					array('name' => 'pickup_time_label', 'label' => esc_html__('Pickup Time Label', 'ecab-taxi-booking-manager'), 'type' => 'text', 'default' => 'Pickup Time'),
-					array('name' => 'pickup_location_label', 'label' => esc_html__('Pickup Location Label', 'ecab-taxi-booking-manager'), 'type' => 'text', 'default' => 'Pickup Location'),
-					array('name' => 'dropoff_location_label', 'label' => esc_html__('Drop-Off Location Label', 'ecab-taxi-booking-manager'), 'type' => 'text', 'default' => 'Drop-Off Location'),
-					array('name' => 'select_date_placeholder', 'label' => esc_html__('Select Date Placeholder', 'ecab-taxi-booking-manager'), 'type' => 'text', 'default' => 'Select Date'),
-					array('name' => 'select_time_placeholder', 'label' => esc_html__('Select Time Placeholder', 'ecab-taxi-booking-manager'), 'type' => 'text', 'default' => 'Please Select Time'),
-					array('name' => 'enter_pickup_location_placeholder', 'label' => esc_html__('Enter Pickup Location Placeholder', 'ecab-taxi-booking-manager'), 'type' => 'text', 'default' => 'Enter Pick-Up Location'),
-					array('name' => 'enter_dropoff_location_placeholder', 'label' => esc_html__('Enter Drop-Off Location Placeholder', 'ecab-taxi-booking-manager'), 'type' => 'text', 'default' => 'Enter Drop-Off Location'),
-					array('name' => 'select_destination_location_label', 'label' => esc_html__('Select Destination Location Label', 'ecab-taxi-booking-manager'), 'type' => 'text', 'default' => 'Select Destination Location'),
-					array('name' => 'transfer_type_label', 'label' => esc_html__('Transfer Type Label', 'ecab-taxi-booking-manager'), 'type' => 'text', 'default' => 'Transfer Type'),
-					array('name' => 'one_way_label', 'label' => esc_html__('One Way Label', 'ecab-taxi-booking-manager'), 'type' => 'text', 'default' => 'One Way'),
-					array('name' => 'return_label', 'label' => esc_html__('Return Label', 'ecab-taxi-booking-manager'), 'type' => 'text', 'default' => 'Return'),
-					array('name' => 'return_date_label', 'label' => esc_html__('Return Date Label', 'ecab-taxi-booking-manager'), 'type' => 'text', 'default' => 'Return Date'),
-					array('name' => 'return_time_label', 'label' => esc_html__('Return Time Label', 'ecab-taxi-booking-manager'), 'type' => 'text', 'default' => 'Return Time'),
-					array('name' => 'max_passenger_label', 'label' => esc_html__('Maximum Passenger Label', 'ecab-taxi-booking-manager'), 'type' => 'text', 'default' => 'Maximum Passenger'),
-					array('name' => 'max_bag_label', 'label' => esc_html__('Maximum Bag Label', 'ecab-taxi-booking-manager'), 'type' => 'text', 'default' => 'Maximum Bag'),
-					array('name' => 'number_of_passengers_label', 'label' => esc_html__('Number of Passengers Label', 'ecab-taxi-booking-manager'), 'type' => 'text', 'default' => 'Number of Passengers'),
-					array('name' => 'search_button_label', 'label' => esc_html__('Search Button Label', 'ecab-taxi-booking-manager'), 'type' => 'text', 'default' => 'Search'),
-					array('name' => 'previous_button_label', 'label' => esc_html__('Previous Button Label', 'ecab-taxi-booking-manager'), 'type' => 'text', 'default' => 'Previous'),
-					array('name' => 'next_button_label', 'label' => esc_html__('Next Button Label', 'ecab-taxi-booking-manager'), 'type' => 'text', 'default' => 'Next'),
-					array('name' => 'summary_label', 'label' => esc_html__('Summary Label', 'ecab-taxi-booking-manager'), 'type' => 'text', 'default' => 'SUMMARY'),
-					array('name' => 'total_distance_label', 'label' => esc_html__('Total Distance Label', 'ecab-taxi-booking-manager'), 'type' => 'text', 'default' => 'TOTAL DISTANCE'),
-					array('name' => 'total_time_label', 'label' => esc_html__('Total Time Label', 'ecab-taxi-booking-manager'), 'type' => 'text', 'default' => 'TOTAL TIME'),
-					array('name' => 'hours_label', 'label' => esc_html__('Hours Label', 'ecab-taxi-booking-manager'), 'type' => 'text', 'default' => 'Hours'),
-					array('name' => 'service_times_label', 'label' => esc_html__('Service Times Label', 'ecab-taxi-booking-manager'), 'type' => 'text', 'default' => 'Service Times'),
-					array('name' => 'details_label', 'label' => esc_html__('Details Label', 'ecab-taxi-booking-manager'), 'type' => 'text', 'default' => 'Details'),
-					array('name' => 'total_label', 'label' => esc_html__('Total Label', 'ecab-taxi-booking-manager'), 'type' => 'text', 'default' => 'Total : '),
-					array('name' => 'book_now_label', 'label' => esc_html__('Book Now Button Label', 'ecab-taxi-booking-manager'), 'type' => 'text', 'default' => 'Book Now'),
-					array('name' => 'select_car_label', 'label' => esc_html__('Select Car Button Label', 'ecab-taxi-booking-manager'), 'type' => 'text', 'default' => 'Select Car'),
-					array('name' => 'selected_label', 'label' => esc_html__('Selected Button Label', 'ecab-taxi-booking-manager'), 'type' => 'text', 'default' => 'Selected'),
-					array('name' => 'out_of_stock_label', 'label' => esc_html__('Out of Stock Label', 'ecab-taxi-booking-manager'), 'type' => 'text', 'default' => 'Out of Stock'),
-					array('name' => 'choose_extra_features_label', 'label' => esc_html__('Choose Extra Features Label', 'ecab-taxi-booking-manager'), 'type' => 'text', 'default' => 'Choose Extra Features (Optional)'),
-					array('name' => 'select_label', 'label' => esc_html__('Select Button Label', 'ecab-taxi-booking-manager'), 'type' => 'text', 'default' => 'Select'),
-					array('name' => 'selected_label_2', 'label' => esc_html__('Selected Button Label 2', 'ecab-taxi-booking-manager'), 'type' => 'text', 'default' => 'Selected'),
-					array('name' => 'no_waiting_label', 'label' => esc_html__('No Waiting Label', 'ecab-taxi-booking-manager'), 'type' => 'text', 'default' => 'No Waiting'),
-					array('name' => 'extra_waiting_hours_label', 'label' => esc_html__('Extra Waiting Hours Label', 'ecab-taxi-booking-manager'), 'type' => 'text', 'default' => 'Extra Waiting Hours'),
-					array('name' => 'hours_in_waiting_label', 'label' => esc_html__('Hours in Waiting Hours Label', 'ecab-taxi-booking-manager'), 'type' => 'text', 'default' => 'Hours'),
-					array('name' => 'select_hours_label', 'label' => esc_html__('Select Hours Label', 'ecab-taxi-booking-manager'), 'type' => 'text', 'default' => 'Select Hours'),
-					array('name' => 'number_of_bags_label', 'label' => esc_html__('Number Of Bags Label', 'ecab-taxi-booking-manager'), 'type' => 'text', 'default' => 'Number Of Bags'),
-					array('name' => 'number_of_passengers_filter_label', 'label' => esc_html__('Number Of Passengers Filter Label', 'ecab-taxi-booking-manager'), 'type' => 'text', 'default' => 'Number Of Passengers'),
-				)),
+			'mptbm_rest_api_settings' => apply_filters('filter_mptbm_rest_api_settings', array(
+				array(
+					'name' => 'enable_rest_api',
+					'label' => esc_html__('Enable REST API', 'ecab-taxi-booking-manager'),
+					'desc' => esc_html__('Enable or disable the REST API for taxi booking operations', 'ecab-taxi-booking-manager'),
+					'type' => 'select',
+					'default' => 'no',
+					'options' => array(
+						'yes' => esc_html__('Enable', 'ecab-taxi-booking-manager'),
+						'no' => esc_html__('Disable', 'ecab-taxi-booking-manager')
+					)
+				),
+				array(
+					'name' => 'api_base_url',
+					'label' => esc_html__('API Base URL', 'ecab-taxi-booking-manager'),
+					'desc' => esc_html__('The base URL for your REST API endpoints', 'ecab-taxi-booking-manager'),
+					'type' => 'text',
+					'default' => site_url('wp-json/ecab-taxi/v1/'),
+					'readonly' => true
+				),
+				array(
+					'name' => 'enable_api_key_auth',
+					'label' => esc_html__('Enable API Key Authentication', 'ecab-taxi-booking-manager'),
+					'desc' => esc_html__('Allow authentication using API keys for server-to-server communication', 'ecab-taxi-booking-manager'),
+					'type' => 'select',
+					'default' => 'yes',
+					'options' => array(
+						'yes' => esc_html__('Enable', 'ecab-taxi-booking-manager'),
+						'no' => esc_html__('Disable', 'ecab-taxi-booking-manager')
+					)
+				),
+				array(
+					'name' => 'api_key_expiry',
+					'label' => esc_html__('API Key Expiry (days)', 'ecab-taxi-booking-manager'),
+					'desc' => esc_html__('Number of days after which API keys expire (0 for no expiry)', 'ecab-taxi-booking-manager'),
+					'type' => 'number',
+					'default' => '365'
+				),
+				array(
+					'name' => 'enable_app_passwords',
+					'label' => esc_html__('Enable Application Passwords', 'ecab-taxi-booking-manager'),
+					'desc' => esc_html__('Allow users to generate application passwords for API access', 'ecab-taxi-booking-manager'),
+					'type' => 'select',
+					'default' => 'yes',
+					'options' => array(
+						'yes' => esc_html__('Enable', 'ecab-taxi-booking-manager'),
+						'no' => esc_html__('Disable', 'ecab-taxi-booking-manager')
+					)
+				),
+				array(
+					'name' => 'rate_limit_enabled',
+					'label' => esc_html__('Enable Rate Limiting', 'ecab-taxi-booking-manager'),
+					'desc' => esc_html__('Limit the number of API requests per minute', 'ecab-taxi-booking-manager'),
+					'type' => 'select',
+					'default' => 'yes',
+					'options' => array(
+						'yes' => esc_html__('Enable', 'ecab-taxi-booking-manager'),
+						'no' => esc_html__('Disable', 'ecab-taxi-booking-manager')
+					)
+				),
+				array(
+					'name' => 'rate_limit_requests',
+					'label' => esc_html__('Rate Limit (requests/minute)', 'ecab-taxi-booking-manager'),
+					'desc' => esc_html__('Maximum number of API requests allowed per minute per API key', 'ecab-taxi-booking-manager'),
+					'type' => 'number',
+					'default' => '100'
+				),
+				array(
+					'name' => 'allowed_user_roles',
+					'label' => esc_html__('API Access Roles', 'ecab-taxi-booking-manager'),
+					'desc' => esc_html__('Select which user roles can generate API keys', 'ecab-taxi-booking-manager'),
+					'type' => 'multicheck',
+					'default' => array(
+						'administrator' => 'administrator'
+					),
+					'options' => array(
+						'administrator' => esc_html__('Administrator', 'ecab-taxi-booking-manager'),
+						'editor' => esc_html__('Editor', 'ecab-taxi-booking-manager'),
+						'shop_manager' => esc_html__('Shop Manager', 'ecab-taxi-booking-manager')
+					)
+				),
+				array(
+					'name' => 'api_logging',
+					'label' => esc_html__('Enable API Logging', 'ecab-taxi-booking-manager'),
+					'desc' => esc_html__('Log API requests for debugging and monitoring', 'ecab-taxi-booking-manager'),
+					'type' => 'select',
+					'default' => 'yes',
+					'options' => array(
+						'yes' => esc_html__('Enable', 'ecab-taxi-booking-manager'),
+						'no' => esc_html__('Disable', 'ecab-taxi-booking-manager')
+					)
+				),
+				array(
+					'name' => 'cors_enabled',
+					'label' => esc_html__('Enable CORS', 'ecab-taxi-booking-manager'),
+					'desc' => esc_html__('Enable Cross-Origin Resource Sharing for web applications', 'ecab-taxi-booking-manager'),
+					'type' => 'select',
+					'default' => 'yes',
+					'options' => array(
+						'yes' => esc_html__('Enable', 'ecab-taxi-booking-manager'),
+						'no' => esc_html__('Disable', 'ecab-taxi-booking-manager')
+					)
+				),
+				array(
+					'name' => 'cors_allowed_origins',
+					'label' => esc_html__('Allowed Origins', 'ecab-taxi-booking-manager'),
+					'desc' => esc_html__('Comma-separated list of allowed origins (* for all)', 'ecab-taxi-booking-manager'),
+					'type' => 'textarea',
+					'default' => '*'
+				)
+			)),
 				'mptbm_buffer_settings' => apply_filters('filter_mptbm_buffer_settings', array(
 					array(
 						'name' => 'buffer_time',

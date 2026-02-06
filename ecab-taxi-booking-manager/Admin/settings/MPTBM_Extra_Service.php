@@ -75,17 +75,25 @@
 			public function extra_service_item( $field = array() ) {
 				$field         = $field ?: array();
 				$service_icon  = array_key_exists( 'service_icon', $field ) ? $field['service_icon'] : '';
+				$service_image = array_key_exists( 'service_image', $field ) ? $field['service_image'] : '';
 				$service_name  = array_key_exists( 'service_name', $field ) ? $field['service_name'] : '';
 				$service_price = array_key_exists( 'service_price', $field ) ? $field['service_price'] : '';
 				$input_type    = array_key_exists( 'service_qty_type', $field ) ? $field['service_qty_type'] : 'inputbox';
 				$description   = array_key_exists( 'extra_service_description', $field ) ? $field['extra_service_description'] : '';
 				$icon          = $image = "";
+				
+				// Handle service_icon (for backward compatibility)
 				if ( $service_icon ) {
 					if ( preg_match( '/\s/', $service_icon ) ) {
 						$icon = $service_icon;
 					} else {
 						$image = $service_icon;
 					}
+				}
+				
+				// Handle separate service_image field
+				if ( $service_image ) {
+					$image = $service_image;
 				}
 				?>
 				<tr class="mp_remove_area">
@@ -101,7 +109,15 @@
 						</label>
 					</td>
 					<td class="text-center">
-						<input type="number" pattern="[0-9]*" step="0.01" class="small mp_price_validation" name="service_price[]" placeholder="<?php esc_attr_e( 'EX: 10', 'ecab-taxi-booking-manager' ); ?>" value="<?php echo esc_attr( $service_price ); ?>"/>
+						<input
+							type="number"
+							step="0.01"
+							min="0"
+							class="small"
+							name="service_price[]"
+							placeholder="<?php esc_attr_e( 'EX: 10.50', 'ecab-taxi-booking-manager' ); ?>"
+							value="<?php echo esc_attr( $service_price ); ?>"
+						/>
 					</td>
 					<td>
 						<select name="service_qty_type[]" class='mideum'>
@@ -236,7 +252,16 @@
 				$extra_count               = count( $extra_names );
 				for ( $i = 0; $i < $extra_count; $i ++ ) {
 					if ( $extra_names[ $i ] && $extra_price[ $i ] >= 0 ) {
-						$new_extra_service[ $i ]['service_icon']              = $extra_icon[ $i ] ?? '';
+						$icon = $image = "";
+						if ( $extra_icon[ $i ] ) {
+							if ( preg_match( '/\s/', $extra_icon[ $i ] ) ) {
+								$icon = $extra_icon[ $i ];
+							} else {
+								$image = $extra_icon[ $i ];
+							}
+						}
+						$new_extra_service[ $i ]['service_icon']              = $icon;
+						$new_extra_service[ $i ]['service_image']            = $image;
 						$new_extra_service[ $i ]['service_name']              = $extra_names[ $i ];
 						$new_extra_service[ $i ]['service_price']             = $extra_price[ $i ];
 						$new_extra_service[ $i ]['service_qty_type']          = $extra_qty_type[ $i ] ?? 'inputbox';

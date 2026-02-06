@@ -76,9 +76,6 @@
 			}
 			public function get_mptbm_map_search_result() {
 				// Debug logging for search initiation
-				error_log('=== MPTBM DEBUG: get_mptbm_map_search_result started ===');
-				error_log('MPTBM DEBUG: POST data - ' . print_r($_POST, true));
-				error_log('MPTBM DEBUG: COOKIE data - ' . print_r($_COOKIE, true));
 				
 				// Clear location-based pricing cache for fresh calculations on each search
 				// This prevents cached pricing data from affecting subsequent searches with same locations
@@ -99,13 +96,11 @@
 						"DELETE FROM {$wpdb->options} WHERE option_name LIKE %s",
 						'_transient_timeout_' . $pattern
 					));
-					error_log("MPTBM DEBUG: Cleared {$deleted_transients} transients and {$deleted_timeouts} timeouts for pattern: {$pattern}");
 				}
 				
 				// Ensure original_price_based is set for proper pricing calculations
 				$price_based = isset($_POST['price_based']) ? sanitize_text_field($_POST['price_based']) : 'dynamic';
 				set_transient('original_price_based', $price_based, HOUR_IN_SECONDS);
-				error_log("MPTBM DEBUG: Set original_price_based transient to: {$price_based}");
 				
 				// Buffer time validation
 				$buffer_time = (int) MP_Global_Function::get_settings('mptbm_general_settings', 'enable_buffer_time');
@@ -141,25 +136,49 @@
 					}
 				}
 				
-				$distance = isset($_COOKIE['mptbm_distance']) ? absint($_COOKIE['mptbm_distance']) : '';
-				$duration = isset($_COOKIE['mptbm_duration']) ? absint($_COOKIE['mptbm_duration']) : '';
+				// Secure: Calculate distance server-side using coordinates passed from JS
+				$start_coords = isset($_POST['start_place_coordinates']) ? $_POST['start_place_coordinates'] : [];
+				$end_coords = isset($_POST['end_place_coordinates']) ? $_POST['end_place_coordinates'] : [];
 				
-				error_log("MPTBM DEBUG: Distance from cookie: {$distance}, Duration from cookie: {$duration}");
-				error_log('MPTBM DEBUG: About to include choose_vehicles.php template');
+				$server_data = false;
+				if (!empty($start_coords) && !empty($end_coords)) {
+					$s_lat = isset($start_coords['latitude']) ? $start_coords['latitude'] : '';
+					$s_lng = isset($start_coords['longitude']) ? $start_coords['longitude'] : '';
+					$e_lat = isset($end_coords['latitude']) ? $end_coords['latitude'] : '';
+					$e_lng = isset($end_coords['longitude']) ? $end_coords['longitude'] : '';
+					
+					$server_data = MPTBM_Function::get_server_distance($s_lat, $s_lng, $e_lat, $e_lng);
+				}
+
+				if ($server_data) {
+					$distance = $server_data['distance'];
+					$duration = $server_data['duration'];
+					
+					// Store in Session for Cart Validation
+					if (session_status() === PHP_SESSION_NONE) session_start();
+					$_SESSION['mptbm_secure_distance'] = $distance;
+					$_SESSION['mptbm_secure_duration'] = $duration;
+					$_SESSION['mptbm_secure_start_place'] = isset($_POST['start_place']) ? sanitize_text_field($_POST['start_place']) : '';
+					$_SESSION['mptbm_secure_end_place'] = isset($_POST['end_place']) ? sanitize_text_field($_POST['end_place']) : '';
+					session_write_close();
+				} else {
+					// Fallback (Less Secure, but keeps functionality if server API fails)
+					// We still try to use POST over Cookie as per previous fix
+					$distance = isset($_POST['mptbm_distance']) ? absint($_POST['mptbm_distance']) : (isset($_COOKIE['mptbm_distance']) ? absint($_COOKIE['mptbm_distance']) : '');
+					$duration = isset($_POST['mptbm_duration']) ? absint($_POST['mptbm_duration']) : (isset($_COOKIE['mptbm_duration']) ? absint($_COOKIE['mptbm_duration']) : '');
+				}
+				
+				
 				
 				// if ($distance && $duration) {
 					include(MPTBM_Function::template_path('registration/choose_vehicles.php'));
 				// }
 				
-				error_log('=== MPTBM DEBUG: get_mptbm_map_search_result completed ===');
 			
 			die(); // Ensure further execution stops after outputting the JavaScript
 			}
 			public function get_mptbm_map_search_result_redirect(){
 				// Debug logging for redirect search initiation
-				error_log('=== MPTBM DEBUG: get_mptbm_map_search_result_redirect started ===');
-				error_log('MPTBM DEBUG: POST data - ' . print_r($_POST, true));
-				error_log('MPTBM DEBUG: COOKIE data - ' . print_r($_COOKIE, true));
 				
 				// Clear location-based pricing cache for fresh calculations on each search
 				// This prevents cached pricing data from affecting subsequent searches with same locations
@@ -180,13 +199,11 @@
 						"DELETE FROM {$wpdb->options} WHERE option_name LIKE %s",
 						'_transient_timeout_' . $pattern
 					));
-					error_log("MPTBM DEBUG: Cleared {$deleted_transients} transients and {$deleted_timeouts} timeouts for pattern: {$pattern}");
 				}
 				
 				// Ensure original_price_based is set for proper pricing calculations
 				$price_based = isset($_POST['price_based']) ? sanitize_text_field($_POST['price_based']) : 'dynamic';
 				set_transient('original_price_based', $price_based, HOUR_IN_SECONDS);
-				error_log("MPTBM DEBUG: Set original_price_based transient to: {$price_based}");
 				
 				// Buffer time validation
 				$buffer_time = (int) MP_Global_Function::get_settings('mptbm_general_settings', 'enable_buffer_time');
@@ -224,8 +241,35 @@
 				
 				ob_start(); // Start output buffering
 					
-					$distance = isset($_COOKIE['mptbm_distance']) ? absint($_COOKIE['mptbm_distance']) : '';
-					$duration = isset($_COOKIE['mptbm_duration']) ? absint($_COOKIE['mptbm_duration']) : '';
+				// Secure: Calculate distance server-side using coordinates passed from JS
+				$start_coords = isset($_POST['start_place_coordinates']) ? $_POST['start_place_coordinates'] : [];
+				$end_coords = isset($_POST['end_place_coordinates']) ? $_POST['end_place_coordinates'] : [];
+				
+				$server_data = false;
+				if (!empty($start_coords) && !empty($end_coords)) {
+					$s_lat = isset($start_coords['latitude']) ? $start_coords['latitude'] : '';
+					$s_lng = isset($start_coords['longitude']) ? $start_coords['longitude'] : '';
+					$e_lat = isset($end_coords['latitude']) ? $end_coords['latitude'] : '';
+					$e_lng = isset($end_coords['longitude']) ? $end_coords['longitude'] : '';
+					
+					$server_data = MPTBM_Function::get_server_distance($s_lat, $s_lng, $e_lat, $e_lng);
+				}
+
+				if ($server_data) {
+					$distance = $server_data['distance'];
+					$duration = $server_data['duration'];
+					
+					// Store in Session
+					if (session_status() === PHP_SESSION_NONE) session_start();
+					$_SESSION['mptbm_secure_distance'] = $distance;
+					$_SESSION['mptbm_secure_duration'] = $duration;
+					$_SESSION['mptbm_secure_start_place'] = isset($_POST['start_place']) ? sanitize_text_field($_POST['start_place']) : '';
+					$_SESSION['mptbm_secure_end_place'] = isset($_POST['end_place']) ? sanitize_text_field($_POST['end_place']) : '';
+					session_write_close();
+				} else {
+					$distance = isset($_POST['mptbm_distance']) ? absint($_POST['mptbm_distance']) : (isset($_COOKIE['mptbm_distance']) ? absint($_COOKIE['mptbm_distance']) : '');
+					$duration = isset($_POST['mptbm_duration']) ? absint($_POST['mptbm_duration']) : (isset($_COOKIE['mptbm_duration']) ? absint($_COOKIE['mptbm_duration']) : '');
+				}
 					// if ($distance && $duration) {
 						include(MPTBM_Function::template_path('registration/choose_vehicles.php'));
 					// }

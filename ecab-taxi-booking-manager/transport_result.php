@@ -13,18 +13,15 @@ if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
 
-// Debug logging for transport result page
-error_log('=== MPTBM DEBUG: Transport Result Page Started ===');
-error_log('MPTBM DEBUG: Session data available: ' . (isset($_SESSION['custom_content']) ? 'YES' : 'NO'));
+
 
 // Retrieve the content from the session variable
 $content = isset($_SESSION['custom_content']) ? $_SESSION['custom_content'] : '';
 
-error_log('MPTBM DEBUG: Content length: ' . strlen($content));
+
 
 // Check if $content is empty, redirect to homepage if it is
 if (empty($content)) {
-    error_log('MPTBM DEBUG: No content found, redirecting to homepage');
     wp_redirect(home_url());
     exit;
 }
@@ -260,7 +257,7 @@ if (function_exists('wp_is_block_theme') && wp_is_block_theme()) {
     <div class="container">
         <div class="container background-img-skin">
             <div class="mpStyle mptbm_transport_search_area">
-                <div class="mpTabsNext _mT">
+                <div class="mpTabsNext">
                     <div class="tabListsNext">
                         <div data-tabs-target-next="#mptbm_pick_up_details" class="tabItemNext active" data-open-text="1" data-close-text=" " data-open-icon="" data-close-icon="fas fa-check" data-add-class="success">
                             <h4 class="circleIcon" data-class>
@@ -281,7 +278,7 @@ if (function_exists('wp_is_block_theme') && wp_is_block_theme()) {
                                 <span class="mp_zero" data-icon></span>
                                 <span class="mp_zero" data-text>3</span>
                             </h4>
-                            <h6 class="circleTitle" data-class><?php esc_html_e('Place Order', 'ecab-taxi-booking-manager'); ?></h6>
+                            <h6 class="circleTitle" data-class><?php echo mptbm_get_translation('place_order_label', __('Place Order', 'ecab-taxi-booking-manager')); ?></h6>
                         </div>
                     </div>
                     <div class="tabsContentNext">
@@ -303,7 +300,6 @@ if (function_exists('wp_is_block_theme') && wp_is_block_theme()) {
                                 // Output the cleaned content
                                 echo $clean_content;
                             } else {
-                                error_log('Transport Result - No display content available');
                                 echo '<div style="text-align: center; padding: 50px; color: #666;">';
                                 echo '<h3>No content available</h3>';
                                 echo '<p>Please go back and search for transport again.</p>';
@@ -355,7 +351,6 @@ jQuery(document).ready(function($) {
             });
         }
         
-        console.log('Transport Result Page: Forced refresh of vehicle pricing and visibility. Vehicles visible:', $('.mptbm_booking_item:visible').length);
         
     }, 100); // Small delay to ensure DOM is ready
 });

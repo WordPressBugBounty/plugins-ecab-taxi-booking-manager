@@ -33,7 +33,10 @@
 							<?php if ($service_image) { ?>
 								<div class="service_img_area alignCenter">
 									<div class="bg_image_area">
-										<div data-bg-image="<?php echo esc_attr(MP_Global_Function::get_image_url('', $service_image, 'medium')); ?>"></div>
+										<?php 
+										$image_url = is_numeric($service_image) ? wp_get_attachment_image_url($service_image, 'medium') : MP_Global_Function::get_image_url('', $service_image, 'medium');
+										?>
+										<img src="<?php echo esc_attr($image_url); ?>" alt="<?php echo esc_attr($service_name); ?>" style="max-width: 125px; max-height: 125px; width: 100%; height: auto; object-fit: cover; border-radius: 4px;">
 									</div>
 								</div>
 							<?php } ?>
@@ -73,7 +76,7 @@
 		<div class="divider"></div>
 		<div class="justifyBetween">
 			<div></div>
-			<button class="_successButton_min_200 mptbm_book_now" style="display:none;" type="button" data-wc_link_id="<?php echo esc_attr($link_wc_product); ?>">
+			<button class="_themeButton_min_200 mptbm_book_now" style="display:none;" type="button" data-wc_link_id="<?php echo esc_attr($link_wc_product); ?>">
 				<span class="fas fa-cart-plus _mR_xs"></span>
 				<?php esc_html_e('Book Now', 'ecab-taxi-booking-manager'); ?>
 			</button>

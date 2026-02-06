@@ -4,7 +4,7 @@ Author URI : https://mage-people.com
 Tags: Taxi Service, Chauffeur Service, Ride Booking, Cab Booking, Transportation
 Requires at least: 5.3
 Stable tag: trunk
-Tested up to: 6.8.2
+Tested up to: 6.9
 Requires PHP: 7.0
 License: GPLv2 or later
 License URI: http://www.gnu.org/licenses/gpl-2.0.html
@@ -47,8 +47,9 @@ Easily integrate with popular payment gateways to offer secure and diverse payme
 🤹 Booking Management
 Efficiently manage all taxi bookings from your WordPress dashboard, with the ability to view, modify, or cancel bookings as needed.
 
-🗺 Google Maps API
-Google Maps API is integrated for route mapping, enhancing the navigation experience for both customers and drivers.
+🗺 Multiple Map Providers
+**OpenStreetMap Integration (FREE)**: Use OpenStreetMap with no API costs or Google API key required! Full route mapping, distance calculation, and address search functionality.
+**Google Maps API**: Google Maps integration with faster place search and more places than OpenStreetMap. Choose your preferred map provider in settings.
 
 💦 Responsive Design
 The plugin is designed to be fully responsive, offering a smooth booking experience across various devices.
@@ -112,8 +113,10 @@ Add distance-based tiered pricing to your E-Cab rides. Automatically adjust fare
 **≣ Comprehensive Order List Section
 View and manage all bookings in a detailed order list
 
-**Third-Party Service:**
-This plugin relies on the Google Maps API, a service provided by Google, Inc. It is used for displaying Google Maps and finding distance. Please note that your usage of this plugin constitutes acceptance of Google's terms and policies.
+**Third-Party Services:**
+**OpenStreetMap (Default - FREE)**: The plugin uses OpenStreetMap by default, which is completely free and requires no API keys. OpenStreetMap provides route mapping, distance calculation, and address search functionality at no cost.
+
+**Google Maps API (Optional)**: If you choose to use Google Maps, this plugin relies on the Google Maps API, a service provided by Google, Inc. Google Maps offers faster place search and more places than OpenStreetMap. Please note that your usage of Google Maps constitutes acceptance of Google's terms and policies.
 
 **Link to Google Maps API:**
 For more information about the Google Maps API, visit: [Google Maps API Link](https://developers.google.com/maps/documentation/javascript/get-api-key)
@@ -133,6 +136,8 @@ Navigate to "Plugins" > "Add New."
 Click the "Upload Plugin" button at the top of the page.
 Choose the ecab-taxi-booking-manager.zip file and click "Install Now."
 Once installed, click "Activate" to enable the Ecab Taxi Booking Manager WordPress plugin.
+
+**Note**: The plugin works out of the box with OpenStreetMap (no API key required). If you prefer to use Google Maps, you can configure your Google Maps API key in the plugin settings.
 
 == Guideline ==
 Shortcode:
@@ -205,6 +210,8 @@ A. You need to Re-save permalink settings it will solve the 404. if still does n
 = Q.How its work? =
 A. Woocommerce Events Manager is one of the simple event plugins for WordPress which is based on Woocommerce. It works as an individual event and its payment functionality is handled with WooCommerce so there are no worries about the payment gateway you can use every payment gateway that supports WooCommerce. The interesting part is the event post type is completely different there is no connection with WooCommerce products so you can sell anything from WooCommerce products. 
 
+= Where do I report security bugs found in this plugin? =
+Please report security bugs found in the source code of the Taxi Booking Manager for WooCommerce plugin through the [Patchstack Vulnerability Disclosure Program](https://patchstack.com/database/vdp/9e5fc03b-cce7-4df9-a6aa-a019346760d7). The Patchstack team will assist you with verification, CVE assignment, and notify the developers of this plugin.
 
 == Legal Protection ==
 
@@ -212,6 +219,18 @@ This transparency is crucial for legal protection. By using this plugin, you ack
 
 
 == Changelog ==
+= 2.0.1 = 
+1. Api issues resolved
+2. buffer time for other days issue resolved 
+3. tax issue fixed 
+4. decimel in extra service issue fixed
+5. xss vulnerbility fixed
+6. dropdown issue for manual pricing fixed
+7. date picker in admin issue fixed
+= 2.0.0 = 
+1. Openstreet map implemented
+2. extra service image issue fixed 
+3. Safari/iphone price not showing issue fixed
 = 1.3.2 = 
 1. Made compatiable with major caching plugins 
 2. Manual shortcode div not properly closing issue fixed

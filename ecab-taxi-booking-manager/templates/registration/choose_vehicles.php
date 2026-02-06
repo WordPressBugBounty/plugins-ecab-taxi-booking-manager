@@ -74,8 +74,6 @@ function mptbm_check_transport_area_geo_fence($post_id, $operation_area_id, $sta
             var end_place_coordinates = <?php echo wp_json_encode($end_place_coordinates); ?>;
             var startInArea = geolib.isPointInPolygon(start_place_coordinates, operation_area_coordinates);
             var endInArea = geolib.isPointInPolygon(end_place_coordinates, operation_area_coordinates);
-            // For debugging, output to console
-            console.log('Geo-matched debug: post_id', post_id, 'startInArea', startInArea, 'endInArea', endInArea, 'start', start_place_coordinates, 'end', end_place_coordinates, 'polygon', operation_area_coordinates);
             if (startInArea || endInArea) {
                 var selectorClass = `.mptbm_booking_item_${post_id}`;
                 jQuery(selectorClass).removeClass('mptbm_booking_item_hidden');
@@ -84,21 +82,23 @@ function mptbm_check_transport_area_geo_fence($post_id, $operation_area_id, $sta
         </script>
         <?php
         // PHP-side: try to check if pickup or dropoff is inside polygon for logging
-        function pointInPolygon($point, $polygon) {
-            $x = $point['latitude'];
-            $y = $point['longitude'];
-            $inside = false;
-            $n = count($polygon);
-            for ($i = 0, $j = $n - 1; $i < $n; $j = $i++) {
-                $xi = $polygon[$i]['latitude'];
-                $yi = $polygon[$i]['longitude'];
-                $xj = $polygon[$j]['latitude'];
-                $yj = $polygon[$j]['longitude'];
-                $intersect = (($yi > $y) != ($yj > $y)) &&
-                    ($x < ($xj - $xi) * ($y - $yi) / ($yj - $yi + 0.0000001) + $xi);
-                if ($intersect) $inside = !$inside;
+        if ( ! function_exists( 'pointInPolygon' ) ) {
+            function pointInPolygon($point, $polygon) {
+                $x = $point['latitude'];
+                $y = $point['longitude'];
+                $inside = false;
+                $n = count($polygon);
+                for ($i = 0, $j = $n - 1; $i < $n; $j = $i++) {
+                    $xi = $polygon[$i]['latitude'];
+                    $yi = $polygon[$i]['longitude'];
+                    $xj = $polygon[$j]['latitude'];
+                    $yj = $polygon[$j]['longitude'];
+                    $intersect = (($yi > $y) != ($yj > $y)) &&
+                        ($x < ($xj - $xi) * ($y - $yi) / ($yj - $yi + 0.0000001) + $xi);
+                    if ($intersect) $inside = !$inside;
+                }
+                return $inside;
             }
-            return $inside;
         }
         $php_start_in_area = false;
         $php_end_in_area = false;
@@ -243,7 +243,6 @@ function mptbm_check_transport_area_geo_fence($post_id, $operation_area_id, $sta
 function wptbm_get_schedule($post_id, $days_name, $selected_day,$start_time_schedule, $return_time_schedule, $start_place_coordinates, $end_place_coordinates, $price_based) {
     
     $timestamp = strtotime($selected_day);
-
     $selected_day = date('l', $timestamp);
     
     // Check & destroy transport session if exist
@@ -252,14 +251,13 @@ function wptbm_get_schedule($post_id, $days_name, $selected_day,$start_time_sche
         unset($_SESSION["geo_fence_post_" . $post_id]);
     }
     session_write_close();
+    
     //Get operation area id
     $operation_area_ids = get_post_meta($post_id, "mptbm_selected_operation_areas", true);
-
-    
     
     //Schedule array
     $schedule = [];
-    //
+    
     if ($operation_area_ids && $price_based !== "manual") {
         // Handle multiple operation areas
         if (is_array($operation_area_ids)) {
@@ -276,21 +274,23 @@ function wptbm_get_schedule($post_id, $days_name, $selected_day,$start_time_sche
                             $operation_area_coordinates[] = ["latitude" => $flat_operation_area_coordinates[$i], "longitude" => $flat_operation_area_coordinates[$i + 1]];
                         }
                         // PHP-side: try to check if pickup or dropoff is inside polygon for logging
-                        function pointInPolygon($point, $polygon) {
-                            $x = $point['latitude'];
-                            $y = $point['longitude'];
-                            $inside = false;
-                            $n = count($polygon);
-                            for ($i = 0, $j = $n - 1; $i < $n; $j = $i++) {
-                                $xi = $polygon[$i]['latitude'];
-                                $yi = $polygon[$i]['longitude'];
-                                $xj = $polygon[$j]['latitude'];
-                                $yj = $polygon[$j]['longitude'];
-                                $intersect = (($yi > $y) != ($yj > $y)) &&
-                                    ($x < ($xj - $xi) * ($y - $yi) / ($yj - $yi + 0.0000001) + $xi);
-                                if ($intersect) $inside = !$inside;
+                        if ( ! function_exists( 'pointInPolygon' ) ) {
+                            function pointInPolygon($point, $polygon) {
+                                $x = $point['latitude'];
+                                $y = $point['longitude'];
+                                $inside = false;
+                                $n = count($polygon);
+                                for ($i = 0, $j = $n - 1; $i < $n; $j = $i++) {
+                                    $xi = $polygon[$i]['latitude'];
+                                    $yi = $polygon[$i]['longitude'];
+                                    $xj = $polygon[$j]['latitude'];
+                                    $yj = $polygon[$j]['longitude'];
+                                    $intersect = (($yi > $y) != ($yj > $y)) &&
+                                        ($x < ($xj - $xi) * ($y - $yi) / ($yj - $yi + 0.0000001) + $xi);
+                                    if ($intersect) $inside = !$inside;
+                                }
+                                return $inside;
                             }
-                            return $inside;
                         }
                         $php_start_in_area = false;
                         $php_end_in_area = false;
@@ -365,72 +365,125 @@ function wptbm_get_schedule($post_id, $days_name, $selected_day,$start_time_sche
         <?php
     }
     
+    // Check if transport is available for all time
     $available_all_time = get_post_meta($post_id, 'mptbm_available_for_all_time');
-    
-    
     if($available_all_time[0] == 'on'){
         return true;
     }
+    
+    // Get default times
+    $default_start_time = get_post_meta($post_id, "mptbm_default_start_time", true);
+    $default_end_time = get_post_meta($post_id, "mptbm_default_end_time", true);
+    
+    error_log("----------------------------------------");
+    error_log("MPTBM DEBUG: Post ID: " . $post_id);
+    error_log("MPTBM DEBUG: Raw Default Start Time: '" . $default_start_time . "'");
+    error_log("MPTBM DEBUG: Raw Default End Time: '" . $default_end_time . "'");
+    
+    // Build schedule array with proper default handling
     foreach ($days_name as $name) {
         $start_time = get_post_meta($post_id, "mptbm_" . $name . "_start_time", true);
-        if($start_time == ''){
-            $start_time = get_post_meta($post_id, "mptbm_default_start_time", true);
-        }
         $end_time = get_post_meta($post_id, "mptbm_" . $name . "_end_time", true);
-        if($end_time == ''){
-            $end_time = get_post_meta($post_id, "mptbm_default_end_time", true);
+        
+        // If day-specific times are empty, use default times
+        if($start_time == '' || $start_time == 'default'){
+            error_log("MPTBM DEBUG: {$name} - Start time is empty/default. Using default: '" . $default_start_time . "'");
+            $start_time = $default_start_time;
+        } else {
+             error_log("MPTBM DEBUG: {$name} - Found specific start time: '" . $start_time . "'");
         }
-        if ($start_time !== "" && $end_time !== "") {
-            $schedule[$name] = [$start_time, $end_time];
+        
+        if($end_time == '' || $end_time == 'default'){
+            error_log("MPTBM DEBUG: {$name} - End time is empty/default. Using default: '" . $default_end_time . "'");
+            $end_time = $default_end_time;
+        } else {
+             error_log("MPTBM DEBUG: {$name} - Found specific end time: '" . $end_time . "'");
+        }
+        
+        // Only add to schedule if we have valid times
+        if ($start_time !== "" && $end_time !== "" && $start_time !== null && $end_time !== null) {
+            $schedule[$name] = [floatval($start_time), floatval($end_time)];
+        }
+        
+        // Debug: Log schedule building
+        if (defined('WP_DEBUG') && WP_DEBUG) {
+            error_log("Building schedule for {$name}: start={$start_time}, end={$end_time}, default_start={$default_start_time}, default_end={$default_end_time}");
         }
     }
+    
+    // Check if the selected day matches any schedule
+    $selected_day_lower = strtolower($selected_day);
     
     foreach ($schedule as $day => $times) {
         $day_start_time = $times[0];
         $day_end_time = $times[1];
-        $day = ucwords($day);
+        $day_lower = strtolower($day);
         
-        if( $selected_day == $day){ 
-            
-            if (isset($return_time_schedule) && $return_time_schedule !== "") {
-                if ($return_time_schedule >= $day_start_time && $return_time_schedule <= $day_end_time && ($start_time_schedule >= $day_start_time && $start_time_schedule <= $day_end_time)) {
-                    return true; 
-                    
-                }
+        if($selected_day_lower == $day_lower){ 
+            $is_overnight = $day_start_time > $day_end_time;
+            $start_valid = false;
+
+            if ($is_overnight) {
+                $start_valid = ($start_time_schedule >= $day_start_time) || ($start_time_schedule <= $day_end_time);
             } else {
-                if ($start_time_schedule >= $day_start_time && $start_time_schedule <= $day_end_time) {
+                $start_valid = ($start_time_schedule >= $day_start_time) && ($start_time_schedule <= $day_end_time);
+            }
+
+            // Check if start time is within the schedule
+            if ($start_valid) {
+                // If return time is specified, check it too
+                if (isset($return_time_schedule) && $return_time_schedule !== "" && $return_time_schedule !== null) {
+                    $return_valid = false;
+                    if ($is_overnight) {
+                        $return_valid = ($return_time_schedule >= $day_start_time) || ($return_time_schedule <= $day_end_time);
+                    } else {
+                        $return_valid = ($return_time_schedule >= $day_start_time) && ($return_time_schedule <= $day_end_time);
+                    }
+
+                    if ($return_valid) {
+                        return true;
+                    }
+                } else {
                     return true;
                 }
             }
         }
-        
-    }
-    // If all other days have empty start and end times, check the 'default' day
-    $all_empty = true;
-    foreach ($schedule as $times) {
-        if (!empty($times[0]) || !empty($times[1])) {
-            $all_empty = false;
-            break;
-        }
     }
     
-    if ($all_empty) {
-        $default_start_time = get_post_meta($post_id, "mptbm_default_start_time", true);
-        $default_end_time = get_post_meta($post_id, "mptbm_default_end_time", true);
-        if ($default_start_time !== "" && $default_end_time !== "") {
-            if (isset($return_time_schedule) && $return_time_schedule !== "") {
-                if ($return_time_schedule >= $default_start_time && $return_time_schedule <= $default_end_time && ($start_time_schedule >= $default_start_time && $start_time_schedule <= $default_end_time)) {
-                    return true; // $start_time_schedule and $return_time_schedule are within the schedule for this day
-                    
-                }
+    // If no specific day schedule found, check if we should use default times
+    if (empty($schedule) || !isset($schedule[$selected_day_lower])) {
+        if ($default_start_time !== "" && $default_end_time !== "" && $default_start_time !== null && $default_end_time !== null) {
+            $def_start = floatval($default_start_time);
+            $def_end = floatval($default_end_time);
+            
+            $is_overnight = $def_start > $def_end;
+            $start_valid = false;
+            
+            if ($is_overnight) {
+                $start_valid = ($start_time_schedule >= $def_start) || ($start_time_schedule <= $def_end);
             } else {
-                if ($start_time_schedule >= $default_start_time && $start_time_schedule <= $default_end_time) {
-                    return true; // $start_time_schedule is within the schedule for this day
+                $start_valid = ($start_time_schedule >= $def_start) && ($start_time_schedule <= $def_end);
+            }
+
+            if ($start_valid) {
+                 if (isset($return_time_schedule) && $return_time_schedule !== "" && $return_time_schedule !== null) {
+                    $return_valid = false;
+                    if ($is_overnight) {
+                        $return_valid = ($return_time_schedule >= $def_start) || ($return_time_schedule <= $def_end);
+                    } else {
+                        $return_valid = ($return_time_schedule >= $def_start) && ($return_time_schedule <= $def_end);
+                    }
                     
+                    if ($return_valid) {
+                        return true;
+                    }
+                } else {
+                    return true;
                 }
             }
         }
     }
+    
     return false;
 }
 $start_date = isset($_POST["start_date"]) ? sanitize_text_field($_POST["start_date"]) : "";
@@ -607,9 +660,17 @@ $mptbm_passengers = max($mptbm_passengers);
 $selected_max_passenger = isset($_POST['mptbm_max_passenger']) ? intval($_POST['mptbm_max_passenger']) : 0;
 $selected_max_bag = isset($_POST['mptbm_max_bag']) ? intval($_POST['mptbm_max_bag']) : 0;
 
-// Get distance and duration from cookies for price calculation
-$distance = isset($_COOKIE['mptbm_distance']) ? absint($_COOKIE['mptbm_distance']) : '';
-$duration = isset($_COOKIE['mptbm_duration']) ? absint($_COOKIE['mptbm_duration']) : '';
+// Values to show in summary box (prefer user selections from form)
+$summary_passenger = $selected_max_passenger ?: (isset($_POST['mptbm_passengers']) ? absint($_POST['mptbm_passengers']) : '');
+$summary_bag = $selected_max_bag ?: '';
+
+// Get distance and duration from POST (if sent via AJAX fallback) or cookies
+$distance = isset($_POST['mptbm_distance']) && !empty($_POST['mptbm_distance']) ? absint($_POST['mptbm_distance']) : (isset($_COOKIE['mptbm_distance']) ? absint($_COOKIE['mptbm_distance']) : '');
+$duration = isset($_POST['mptbm_duration']) && !empty($_POST['mptbm_duration']) ? absint($_POST['mptbm_duration']) : (isset($_COOKIE['mptbm_duration']) ? absint($_COOKIE['mptbm_duration']) : '');
+
+error_log("MPTBM: Distance received: " . $distance);
+error_log("MPTBM: Duration received: " . $duration);
+error_log("MPTBM: POST data: " . print_r($_POST, true));
 
 // Fallback values for object caching compatibility
 if (empty($distance)) {
@@ -675,47 +736,42 @@ if (empty($duration)) {
 				<!-- Filter area end -->
 					<?php
 
-error_log('MPTBM DEBUG: About to query transport list with price_based: ' . $price_based);
 $all_posts = MPTBM_Query::query_transport_list($price_based);
 
-error_log('MPTBM DEBUG: Found ' . $all_posts->found_posts . ' total posts');
  
 if ($all_posts->found_posts > 0) {
     $posts = $all_posts->posts;
     $vehicle_item_count = 0;
-    error_log('MPTBM DEBUG: Processing ' . count($posts) . ' vehicles');
     foreach ($posts as $post) {
         $post_id = $post->ID;
-        error_log('MPTBM DEBUG: Processing vehicle ID: ' . $post_id);
         $taxi_max_passenger = (int) get_post_meta($post_id, 'mptbm_maximum_passenger', true);
         $taxi_max_bag = (int) get_post_meta($post_id, 'mptbm_maximum_bag', true);
-        // error_log('DEBUG: Taxi ' . $post_id . ' max_passenger=' . $taxi_max_passenger . ', max_bag=' . $taxi_max_bag);
         if (
             ($selected_max_passenger && $taxi_max_passenger < $selected_max_passenger) ||
             ($selected_max_bag && $taxi_max_bag < $selected_max_bag)
         ) {
-            error_log('MPTBM DEBUG: Vehicle ' . $post_id . ' SKIPPED by filter - passenger/bag requirements not met');
             continue; // Skip this taxi, it doesn't meet the filter
         }
         
         $check_schedule = wptbm_get_schedule($post_id, $days_name, $start_date,$start_time_schedule, $return_time_schedule, $start_place_coordinates, $end_place_coordinates, $price_based);
-        error_log('MPTBM DEBUG: Vehicle ' . $post_id . ' schedule check result: ' . ($check_schedule ? 'PASSED' : 'FAILED'));
+        
+        // Debug: Log schedule check result
+        if (defined('WP_DEBUG') && WP_DEBUG) {
+            error_log("Schedule check for post {$post_id}: " . ($check_schedule ? 'AVAILABLE' : 'NOT AVAILABLE') . " - Date: {$start_date}, Time: {$start_time_schedule}");
+        }
         
         if ($check_schedule) {
             $vehicle_item_count = $vehicle_item_count + 1;
             $price_display_type = MP_Global_Function::get_post_info($post_id, 'mptbm_price_display_type', 'normal');
             $custom_message = MP_Global_Function::get_post_info($post_id, 'mptbm_custom_price_message', '');
             
-            error_log('MPTBM DEBUG: Vehicle ' . $post_id . ' - Getting price with distance: ' . $distance . ', duration: ' . $duration . ', start: ' . $start_place . ', end: ' . $end_place);
             
             // Get the price
             $price = MPTBM_Function::get_price($post_id, $distance, $duration, $start_place, $end_place, $waiting_time, $two_way, $fixed_time);
             
-            error_log('MPTBM DEBUG: Vehicle ' . $post_id . ' calculated price: ' . $price . ', display_type: ' . $price_display_type);
             
             // Only skip display if price is 0 and we're not in zero or custom message mode
             if (!$price && $price_display_type === 'normal') {
-                error_log('MPTBM DEBUG: Vehicle ' . $post_id . ' SKIPPED - price is 0 and display type is normal');
                 continue;
             }
             
@@ -729,13 +785,11 @@ if ($all_posts->found_posts > 0) {
                 $price_display = $wc_price;
             }
             
-            error_log('MPTBM DEBUG: Vehicle ' . $post_id . ' INCLUDED - raw_price: ' . $raw_price . ', price_display: ' . strip_tags($price_display));
             
             include MPTBM_Function::template_path("registration/vehicle_item.php");
         }
     }
     
-    error_log('MPTBM DEBUG: Total vehicles processed: ' . count($posts) . ', Total included: ' . $vehicle_item_count);
 } else {
 ?>
 						<div class="_dLayout_mT_bgWarning">

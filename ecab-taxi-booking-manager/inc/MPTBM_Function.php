@@ -56,32 +56,41 @@ if (!class_exists('MPTBM_Function')) {
 			return get_post_meta($post_id, "mptbm_maximum_passenger", 0);
 		}
 
-		public static function get_schedule($post_id)
-		{
-			$days = MP_Global_Function::week_day();
-			$days_name = array_keys($days);
-			$all_empty = true;
-			$schedule = [];
-			foreach ($days_name as $name) {
-				$start_time = get_post_meta($post_id, "mptbm_" . $name . "_start_time", true);
-				$end_time = get_post_meta($post_id, "mptbm_" . $name . "_end_time", true);
-				if ($start_time !== "" && $end_time !== "") {
-					$schedule[$name] = [$start_time, $end_time];
-				}
+	public static function get_schedule($post_id)
+	{
+		$days = MP_Global_Function::week_day();
+		$days_name = array_keys($days);
+		$schedule = [];
+		
+		// Get default times
+		$default_start_time = get_post_meta($post_id, "mptbm_default_start_time", true);
+		$default_end_time = get_post_meta($post_id, "mptbm_default_end_time", true);
+		
+		foreach ($days_name as $name) {
+			$start_time = get_post_meta($post_id, "mptbm_" . $name . "_start_time", true);
+			$end_time = get_post_meta($post_id, "mptbm_" . $name . "_end_time", true);
+			
+			// If day-specific times are empty or set to 'default', use default times
+			if($start_time == '' || $start_time == 'default'){
+				$start_time = $default_start_time;
 			}
-			foreach ($schedule as $times) {
-				if (!empty($times[0]) || !empty($times[1])) {
-					$all_empty = false;
-					break;
-				}
+			if($end_time == '' || $end_time == 'default'){
+				$end_time = $default_end_time;
 			}
-			if ($all_empty) {
-				$default_start_time = get_post_meta($post_id, "mptbm_default_start_time", true);
-				$default_end_time = get_post_meta($post_id, "mptbm_default_end_time", true);
-				$schedule['default'] = [$default_start_time, $default_end_time];
+			
+			// Only add to schedule if we have valid times
+			if ($start_time !== "" && $end_time !== "" && $start_time !== null && $end_time !== null) {
+				$schedule[$name] = [floatval($start_time), floatval($end_time)];
 			}
-			return $schedule;
 		}
+		
+		// If no day-specific schedules found, add default schedule
+		if (empty($schedule) && $default_start_time !== "" && $default_end_time !== "") {
+			$schedule['default'] = [floatval($default_start_time), floatval($default_end_time)];
+		}
+		
+		return $schedule;
+	}
 
 		public static function details_template_path(): string
 		{
@@ -250,7 +259,8 @@ if (!class_exists('MPTBM_Function')) {
 		//*************Price*********************************//
 		public static function get_price($post_id, $distance = 1000, $duration = 3600, $start_place = '', $destination_place = '', $waiting_time = 0, $two_way = 1, $fixed_time = 0)
 		{
-			error_log("MPTBM DEBUG: get_price called for post_id: {$post_id}, distance: {$distance}, duration: {$duration}, start: {$start_place}, end: {$destination_place}");
+			// DEBUG PRICE
+			error_log("MPTBM DEBUG: get_price called. PostID: $post_id, Dist: $distance, Dur: $duration");
 			
 			// Force fresh pricing calculations to prevent caching issues on repeated searches
 			$is_transport_result_page = false;
@@ -282,7 +292,6 @@ if (!class_exists('MPTBM_Function')) {
 			}
 			
 			if ($is_transport_result_page || $is_ajax_search) {
-				error_log("MPTBM DEBUG: Clearing caches for post_id: {$post_id} (transport_result: {$is_transport_result_page}, ajax: {$is_ajax_search})");
 				// Clear pricing-specific cache groups for fresh calculations
 				wp_cache_flush_group('mptbm_pricing');
 				wp_cache_flush_group('weather_pricing');
@@ -293,17 +302,14 @@ if (!class_exists('MPTBM_Function')) {
 					$location_cache_key = md5($start_place . $destination_place);
 					delete_transient('weather_pricing_' . $location_cache_key);
 					delete_transient('traffic_data_' . $location_cache_key);
-					error_log("MPTBM DEBUG: Cleared location-specific transients for key: {$location_cache_key}");
 				}
 			}
 
 			// Get price display type
 			$price_display_type = MP_Global_Function::get_post_info($post_id, 'mptbm_price_display_type', 'normal');
-			error_log("MPTBM DEBUG: post_id {$post_id} - price_display_type: {$price_display_type}");
 			
 			// If price display type is zero, return 0
 			if ($price_display_type === 'zero') {
-				error_log("MPTBM DEBUG: post_id {$post_id} - returning 0 (zero price display type)");
 				return 0;
 			}
 			
@@ -311,14 +317,12 @@ if (!class_exists('MPTBM_Function')) {
 			if ($price_display_type === 'custom_message') {
 				$custom_message = MP_Global_Function::get_post_info($post_id, 'mptbm_custom_price_message', '');
 				set_transient('mptbm_custom_price_message_' . $post_id, $custom_message, HOUR_IN_SECONDS);
-				error_log("MPTBM DEBUG: post_id {$post_id} - returning 0 (custom message)");
 				return 0;
 			}
 
 			// Get price basis information
 			$price_based = MP_Global_Function::get_post_info($post_id, 'mptbm_price_based');
 			$original_price_based = get_transient('original_price_based');
-			error_log("MPTBM DEBUG: post_id {$post_id} - price_based: {$price_based}, original_price_based: {$original_price_based}");
 
 			// If original price basis is fixed_hourly but current price basis is distance, return false
 			if ($original_price_based === 'fixed_hourly' && $price_based === 'distance') {
@@ -562,13 +566,13 @@ if (!class_exists('MPTBM_Function')) {
 			// Apply filters for dynamic pricing (weather, traffic, etc.) if addons are available
 			if (has_filter('mptbm_calculate_price')) {
 				$extra_data = array();
-				
+
 				// Try to get coordinates from various sources for weather/traffic pricing
 				$pickup_lat = get_transient('mptbm_pickup_lat') ?: get_transient('pickup_lat_transient');
 				$pickup_lng = get_transient('mptbm_pickup_lng') ?: get_transient('pickup_lng_transient');
 				$drop_lat = get_transient('mptbm_drop_lat') ?: get_transient('drop_lat_transient');
 				$drop_lng = get_transient('mptbm_drop_lng') ?: get_transient('drop_lng_transient');
-				
+
 				// Fallback to session data
 				if (empty($pickup_lat) || empty($pickup_lng)) {
 					$pickup_lat = isset($_SESSION['pickup_lat']) ? $_SESSION['pickup_lat'] : '';
@@ -578,7 +582,7 @@ if (!class_exists('MPTBM_Function')) {
 					$drop_lat = isset($_SESSION['drop_lat']) ? $_SESSION['drop_lat'] : '';
 					$drop_lng = isset($_SESSION['drop_lng']) ? $_SESSION['drop_lng'] : '';
 				}
-				
+
 				// Final fallback to POST data (for AJAX requests)
 				if (empty($pickup_lat) || empty($pickup_lng)) {
 					$pickup_lat = isset($_POST['origin_lat']) ? $_POST['origin_lat'] : (isset($_POST['pickup_lat']) ? $_POST['pickup_lat'] : '');
@@ -588,7 +592,7 @@ if (!class_exists('MPTBM_Function')) {
 					$drop_lat = isset($_POST['dest_lat']) ? $_POST['dest_lat'] : (isset($_POST['drop_lat']) ? $_POST['drop_lat'] : '');
 					$drop_lng = isset($_POST['dest_lng']) ? $_POST['dest_lng'] : (isset($_POST['drop_lng']) ? $_POST['drop_lng'] : '');
 				}
-				
+
 				if (!empty($pickup_lat) && !empty($pickup_lng)) {
 					$extra_data['origin_lat'] = floatval($pickup_lat);
 					$extra_data['origin_lng'] = floatval($pickup_lng);
@@ -597,14 +601,44 @@ if (!class_exists('MPTBM_Function')) {
 					$extra_data['dest_lat'] = floatval($drop_lat);
 					$extra_data['dest_lng'] = floatval($drop_lng);
 				}
-				
+
 				$selected_start_date = get_transient('start_date_transient') ?: '';
 				$selected_start_time = get_transient('start_time_schedule_transient') ?: '';
-				
+
 				$price = apply_filters('mptbm_calculate_price', $price, $post_id, $selected_start_date, $selected_start_time, $extra_data);
 			}
 
-			error_log("MPTBM DEBUG: post_id {$post_id} - FINAL CALCULATED PRICE: {$price}");
+			
+
+			$wc_check = MP_Global_Function::check_woocommerce();
+
+			if ($wc_check == 1) {
+				$_product_id = MP_Global_Function::get_post_info($post_id, 'link_wc_product', $post_id);
+
+				$product = wc_get_product($_product_id);
+
+				if ($product) {
+					$is_taxable = $product->is_taxable();
+
+					if ($is_taxable) {
+						// Get tax rates for this product
+						$tax_rates = WC_Tax::get_rates($product->get_tax_class());
+
+						if (!empty($tax_rates)) {
+							// Calculate tax on the final price
+							$taxes = WC_Tax::calc_tax($price, $tax_rates, false);
+
+							if (!empty($taxes)) {
+								$tax_amount = array_sum($taxes);
+								// Add tax to the price
+								$price = $price + $tax_amount;
+							} 
+						} 
+					}
+				} 
+			} 
+
+
 			return $price;
 		}
 
@@ -913,7 +947,6 @@ if (!class_exists('MPTBM_Function')) {
 		public static function get_traffic_condition_for_pricing($origin_lat, $origin_lng, $dest_lat, $dest_lng, $google_api_key) {
 						
 			if (empty($google_api_key) || empty($origin_lat) || empty($origin_lng) || empty($dest_lat) || empty($dest_lng)) {
-				// error_log("[MPTBM Traffic API] Missing required parameters - aborting");
 				return array('condition' => '', 'multiplier' => 1.0);
 			}
 			
@@ -921,7 +954,6 @@ if (!class_exists('MPTBM_Function')) {
 			$cache_key = 'traffic_data_' . md5($origin_lat . $origin_lng . $dest_lat . $dest_lng);
 			$cached_data = get_transient($cache_key);
 			if ($cached_data !== false) {
-				// error_log("[MPTBM Traffic API] Using cached data: " . print_r($cached_data, true));
 				return $cached_data;
 			}
 			
@@ -930,36 +962,29 @@ if (!class_exists('MPTBM_Function')) {
 			$url_with_traffic = "https://maps.googleapis.com/maps/api/directions/json?{$base_params}&departure_time=now&traffic_model=best_guess";
 			$url_without_traffic = "https://maps.googleapis.com/maps/api/directions/json?{$base_params}";
 			
-			// error_log("[MPTBM Traffic API] URL with traffic: " . substr($url_with_traffic, 0, 100) . "...");
-			// error_log("[MPTBM Traffic API] URL without traffic: " . substr($url_without_traffic, 0, 100) . "...");
+			
 			
 			// Get both responses
 			$response_with_traffic = wp_remote_get($url_with_traffic);
 			$response_without_traffic = wp_remote_get($url_without_traffic);
 			
 			if (is_wp_error($response_with_traffic)) {
-				// error_log("[MPTBM Traffic API] Error with traffic request: " . $response_with_traffic->get_error_message());
 				return array('condition' => '', 'multiplier' => 1.0);
 			}
 			
 			if (is_wp_error($response_without_traffic)) {
-				// error_log("[MPTBM Traffic API] Error without traffic request: " . $response_without_traffic->get_error_message());
 				return array('condition' => '', 'multiplier' => 1.0);
 			}
 			
 			$body_with_traffic = wp_remote_retrieve_body($response_with_traffic);
 			$body_without_traffic = wp_remote_retrieve_body($response_without_traffic);
 			
-			// error_log("[MPTBM Traffic API] Response with traffic: " . substr($body_with_traffic, 0, 200) . "...");
-				// error_log("[MPTBM Traffic API] Response without traffic: " . substr($body_without_traffic, 0, 200) . "...");
+			
 			
 			$data_with_traffic = json_decode($body_with_traffic, true);
 			$data_without_traffic = json_decode($body_without_traffic, true);
 			
 			if (!isset($data_with_traffic['routes'][0]['legs'][0]) || !isset($data_without_traffic['routes'][0]['legs'][0])) {
-				// error_log("[MPTBM Traffic API] Invalid API response structure");
-					// error_log("[MPTBM Traffic API] With traffic status: " . (isset($data_with_traffic['status']) ? $data_with_traffic['status'] : 'unknown'));
-					// error_log("[MPTBM Traffic API] Without traffic status: " . (isset($data_without_traffic['status']) ? $data_without_traffic['status'] : 'unknown'));
 				return array('condition' => '', 'multiplier' => 1.0);
 			}
 			
@@ -968,12 +993,10 @@ if (!class_exists('MPTBM_Function')) {
 									$data_with_traffic['routes'][0]['legs'][0]['duration']['value'];
 			$duration_without_traffic = $data_without_traffic['routes'][0]['legs'][0]['duration']['value'];
 			
-			// error_log("[MPTBM Traffic API] Duration with traffic: {$duration_with_traffic}s");
-				// error_log("[MPTBM Traffic API] Duration without traffic: {$duration_without_traffic}s");
+			
 			
 			// Calculate traffic multiplier
 			$traffic_multiplier = $duration_with_traffic / $duration_without_traffic;
-			// error_log("[MPTBM Traffic API] Calculated traffic multiplier: $traffic_multiplier");
 			
 			// Determine traffic condition
 			$condition = '';
@@ -992,12 +1015,72 @@ if (!class_exists('MPTBM_Function')) {
 				'multiplier' => $traffic_multiplier
 			);
 			
-			// error_log("[MPTBM Traffic API] Final result: " . print_r($result, true));
 			
 			// Cache the result for 5 minutes
 			set_transient($cache_key, $result, 300);
 			
 			return $result;
+		}
+
+		/**
+		 * Whitelist Google Maps API script from CookieAdmin blocking
+		 * 
+		 * @param string $tag The script tag
+		 * @param string $handle The script handle
+		 * @param string $src The script source
+		 * @return string The modified script tag
+		 */
+		public static function whitelist_google_maps_script($tag, $handle, $src) {
+			if ($handle === 'mptbm_map_api') {
+				// Restore the script type to text/javascript if it was changed to text/plain
+				$tag = str_replace('type="text/plain"', 'type="text/javascript"', $tag);
+				
+				// Remove CookieAdmin category attributes that cause blocking
+				$tag = preg_replace('/data-cookieadmin-category="[^"]*"/', '', $tag);
+			}
+			return $tag;
+		}
+
+		
+		// Helper to calculate distance server-side
+		public static function get_server_distance($start_lat, $start_lng, $end_lat, $end_lng) {
+			if (!$start_lat || !$start_lng || !$end_lat || !$end_lng) {
+				return false;
+			}
+			
+			// Try Google Maps Distance Matrix API first if Key exists
+			$api_key = MP_Global_Function::get_settings('mptbm_map_api_settings', 'map_api_key');
+			if ($api_key) {
+				$url = "https://maps.googleapis.com/maps/api/distancematrix/json?origins={$start_lat},{$start_lng}&destinations={$end_lat},{$end_lng}&mode=driving&key={$api_key}";
+				$response = wp_remote_get($url);
+				if (!is_wp_error($response)) {
+					$body = wp_remote_retrieve_body($response);
+					$data = json_decode($body, true);
+					if (isset($data['rows'][0]['elements'][0]['status']) && $data['rows'][0]['elements'][0]['status'] === 'OK') {
+						return [
+							'distance' => $data['rows'][0]['elements'][0]['distance']['value'], // meters
+							'duration' => $data['rows'][0]['elements'][0]['duration']['value']  // seconds
+						];
+					}
+				}
+			}
+
+			// Fallback to OSRM (Open Source Routing Machine)
+			// Note: OSRM uses {lng},{lat} order
+			$osrm_url = "http://router.project-osrm.org/route/v1/driving/{$start_lng},{$start_lat};{$end_lng},{$end_lat}?overview=false";
+			$response = wp_remote_get($osrm_url);
+			if (!is_wp_error($response)) {
+				$body = wp_remote_retrieve_body($response);
+				$data = json_decode($body, true);
+				if (isset($data['code']) && $data['code'] === 'Ok' && isset($data['routes'][0])) {
+					return [
+						'distance' => $data['routes'][0]['distance'], // meters
+						'duration' => $data['routes'][0]['duration']  // seconds
+					];
+				}
+			}
+			
+			return false;
 		}
 	}
 	new MPTBM_Function();

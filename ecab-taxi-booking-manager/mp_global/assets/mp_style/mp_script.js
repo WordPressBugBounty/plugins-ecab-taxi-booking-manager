@@ -112,7 +112,6 @@ function mp_load_date_picker(parent = jQuery('.mpStyle')) {
 			changeMonth: true,
 			changeYear: false,
 			onSelect: function (dateString, data) {
-				//console.log(mp_date_format_without_year);
 				let date = ('0' + (parseInt(data.selectedMonth) + 1)).slice(-2) + '-' + ('0' + parseInt(data.selectedDay)).slice(-2);
 				jQuery(this).closest('label').find('input[type="hidden"]').val(date).trigger('change');
 			}
@@ -594,7 +593,9 @@ function mp_sticky_management() {
 			target.slideDown(250);
 		} else {
 			target.each(function () {
-				$(this).slideToggle(250).toggleClass('mActive');
+				if ($('.wbtm_passenger_filter_area').length === 0) {
+					$(this).slideToggle(250).toggleClass('mActive');
+				}
 			});
 		}
 		return true;
