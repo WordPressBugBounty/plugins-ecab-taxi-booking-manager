@@ -8,11 +8,14 @@
 	}  // if direct access
 	if (!class_exists('MPTBM_Hidden_Product')) {
 		class MPTBM_Hidden_Product {
-			public function __construct() {
+	public function __construct() {
 				add_action('wp_insert_post', array($this, 'create_hidden_wc_product_on_publish'), 10, 3);
 				add_action('save_post', array($this, 'run_link_product_on_save'), 99, 1);
 				add_action('parse_query', array($this, 'hide_wc_hidden_product_from_product_list'));
 				add_action('wp', array($this, 'hide_hidden_wc_product_from_frontend'));
+
+				add_action('before_delete_post', array($this, 'delete_hidden_product_on_taxi_delete'));
+				add_filter('woocommerce_add_to_cart_validation', array($this, 'validate_add_to_cart'), 10, 2);
 			}
 			public function create_hidden_wc_product_on_publish($post_id, $post) {
 				if ($post->post_type == MPTBM_Function::get_cpt() && $post->post_status == 'publish' && empty(MP_Global_Function::get_post_info($post_id, 'check_if_run_once'))) {
@@ -50,8 +53,8 @@
 					set_post_thumbnail($product_id, get_post_thumbnail_id($post_id));
 					wp_publish_post($product_id);
 					$product_type = 'yes';
-					$_tax_status = isset($_POST['_tax_status']) ? sanitize_text_field($_POST['_tax_status']) : 'none';
-					$_tax_class = isset($_POST['_tax_class']) ? sanitize_text_field($_POST['_tax_class']) : '';
+					$_tax_status = isset($_POST['_tax_status']) ? sanitize_text_field($_POST['_tax_status']) : (get_post_meta($post_id, '_tax_status', true) ?: 'none');
+					$_tax_class = isset($_POST['_tax_class']) ? sanitize_text_field($_POST['_tax_class']) : (get_post_meta($post_id, '_tax_class', true) ?: '');
 					update_post_meta($product_id, '_tax_status', $_tax_status);
 					update_post_meta($product_id, '_tax_class', $_tax_class);
 					update_post_meta($product_id, '_stock_status', 'instock');
@@ -63,9 +66,9 @@
 						'post_title' => $title,
 						'post_name' => uniqid()
 					);
-					remove_action('save_post', 'run_link_product_on_save');
+					remove_action('save_post', array($this, 'run_link_product_on_save'), 99);
 					wp_update_post($my_post);
-					add_action('save_post', 'run_link_product_on_save');
+					add_action('save_post', array($this, 'run_link_product_on_save'), 99);
 				}
 			}
 			public function hide_wc_hidden_product_from_product_list($query) {
@@ -136,6 +139,27 @@
 				);
 				$loop = new WP_Query($args);
 				return $loop->post_count;
+			}
+			
+			public function delete_hidden_product_on_taxi_delete($post_id) {
+				if (get_post_type($post_id) == MPTBM_Function::get_cpt()) {
+					$product_id = get_post_meta($post_id, 'link_wc_product', true);
+					if ($product_id) {
+						wp_delete_post($product_id, true);
+					}
+				}
+			}
+			
+			public function validate_add_to_cart($passed, $product_id) {
+				$mptbm_id = get_post_meta($product_id, 'link_mptbm_id', true);
+				if ($mptbm_id) {
+					$post_status = get_post_status($mptbm_id);
+					if (!$post_status || $post_status !== 'publish') {
+						$passed = false;
+						wc_add_notice(__('This transport service is no longer available.', 'ecab-taxi-booking-manager'), 'error');
+					}
+				}
+				return $passed;
 			}
 		}
 		new MPTBM_Hidden_Product();

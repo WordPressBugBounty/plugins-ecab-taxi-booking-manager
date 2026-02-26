@@ -36,7 +36,8 @@ if (!class_exists('MPTBM_Dependencies')) {
 			require_once MPTBM_PLUGIN_DIR . '/inc/MPTBM_Function.php';
 			require_once MPTBM_PLUGIN_DIR . '/inc/MPTBM_Query.php';
 			require_once MPTBM_PLUGIN_DIR . '/inc/MPTBM_Layout.php';
-		require_once MPTBM_PLUGIN_DIR . '/inc/MPTBM_Rest_Api.php';
+			require_once MPTBM_PLUGIN_DIR . '/inc/MPTBM_Rest_Api.php';
+			require_once MPTBM_PLUGIN_DIR . '/Admin/MPTBM_Hidden_Product.php';
 			require_once MPTBM_PLUGIN_DIR . '/Admin/MPTBM_Admin.php';
 			require_once MPTBM_PLUGIN_DIR . '/Frontend/MPTBM_Frontend.php';
 		}
@@ -94,8 +95,10 @@ if (!class_exists('MPTBM_Dependencies')) {
             $is_operation_areas_page = ($screen && $screen->post_type === 'mptbm_operate_areas');
             $is_settings_page = ($screen && isset($_GET['page']) && $_GET['page'] === 'mptbm_settings_page');
             $is_rent_page = ($screen && $screen->post_type === 'mptbm_rent');
+            $is_locations_screen = ($screen && ($screen->id === 'edit-locations' || $screen->taxonomy === 'locations'));
             
-            if (($is_operation_areas_page || $is_settings_page || $is_rent_page) && $map_type === 'openstreetmap') {
+            if (($is_operation_areas_page || $is_settings_page || $is_rent_page || $is_locations_screen)) {
+                if ($map_type === 'openstreetmap') {
                 // Leaflet core - must load BEFORE mptbm_admin_map
                 wp_enqueue_style('leaflet', 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css', array(), '1.9.4');
                 wp_enqueue_script('leaflet', 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js', array('jquery'), '1.9.4', false);
@@ -108,6 +111,7 @@ if (!class_exists('MPTBM_Dependencies')) {
                 wp_deregister_script('mptbm_admin_map');
                 wp_enqueue_script('mptbm_admin_map', MPTBM_PLUGIN_URL . '/assets/admin/mptbm_map.js', array('jquery', 'leaflet', 'leaflet-draw'), time(), true);
             }
+        }
            
             // Trigger the action hook to add additional scripts if needed
             do_action('add_mptbm_admin_script');
@@ -188,7 +192,7 @@ if (!class_exists('MPTBM_Dependencies')) {
 			// Check nonce for security
 			check_ajax_referer('mptbm_osm_search', 'nonce');
 			
-			$query = isset($_GET['q']) ? sanitize_text_field($_GET['q']) : '';
+			$query = isset($_REQUEST['q']) ? sanitize_text_field($_REQUEST['q']) : '';
 			
 			if (empty($query)) {
 				wp_send_json_error('No search query provided');
@@ -262,12 +266,6 @@ if (!class_exists('MPTBM_Dependencies')) {
 			// Convert Photon GeoJSON format to Nominatim-compatible format
 			$results = array();
 			
-			// Debug: Log the raw response for troubleshooting
-			if ($restrict_to_country === 'yes' && !empty($country_code)) {
-				error_log('OSM Search Debug - Query: ' . $query);
-				error_log('OSM Search Debug - Country Code: ' . $country_code);
-				error_log('OSM Search Debug - Raw Response: ' . json_encode($data));
-			}
 			
 			if (isset($data['features']) && is_array($data['features'])) {
 				foreach ($data['features'] as $feature) {
@@ -316,8 +314,6 @@ if (!class_exists('MPTBM_Dependencies')) {
 						}
 						
 						if (!$country_matches) {
-							// Debug: Log filtered out results
-							error_log('OSM Search Debug - Filtered out result: ' . json_encode($properties));
 							continue; // Skip results from other countries
 						}
 					}

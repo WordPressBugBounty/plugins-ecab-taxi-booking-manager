@@ -124,10 +124,22 @@ if (!class_exists('MPTBM_Query')) {
 				'compare' => '=',
 			) : '';
 
+			$price_based_8 = ($price_based == 'fixed_zone' || $price_based == 'fixed_zone_dropoff') ? array(
+				'key' => 'mptbm_price_based',
+				'value' => 'fixed_zone',
+				'compare' => '=',
+			) : '';
+
+			$price_based_7 = ($price_based == 'fixed_distance' || $price_based == 'fixed_map') ? array(
+		'key' => 'mptbm_price_based',
+		'value' => 'fixed_distance',
+		'compare' => '=',
+	) : '';
+
 			// New inclusive condition ($price_based_6)
 			$price_based_6 = array(
 				'key' => 'mptbm_price_based',
-				'value' => array('inclusive'),
+				'value' => array('inclusive', 'fixed_distance'),
 				'compare' => 'IN',
 			);
 
@@ -142,7 +154,9 @@ if (!class_exists('MPTBM_Query')) {
 					$price_based_2,
 					$price_based_3,
 					$price_based_4,
-					$price_based_5
+					$price_based_5,
+					$price_based_7,
+					$price_based_8
 				)
 			);
 
