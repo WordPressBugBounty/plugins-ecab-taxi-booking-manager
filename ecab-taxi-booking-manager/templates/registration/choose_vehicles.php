@@ -122,34 +122,59 @@ function mptbm_check_transport_area_geo_fence($post_id, $operation_area_id, $sta
 
         $operation_area_coordinates_one = [];
         $operation_area_coordinates_two = [];
+        $geo_area_one = []; // JS geolib fallback
+        $geo_area_two = []; // JS geolib fallback
 
         for ($i = 0; $i < count($flat_operation_area_coordinates_one); $i += 2) {
-            $latitude = $flat_operation_area_coordinates_one[$i];
+            $latitude  = $flat_operation_area_coordinates_one[$i];
             $longitude = $flat_operation_area_coordinates_one[$i + 1];
             $operation_area_coordinates_one[] = $latitude . " " . $longitude;
+            $geo_area_one[] = ["latitude" => floatval($latitude), "longitude" => floatval($longitude)];
         }
 
         for ($i = 0; $i < count($flat_operation_area_coordinates_two); $i += 2) {
-            $latitude = $flat_operation_area_coordinates_two[$i];
+            $latitude  = $flat_operation_area_coordinates_two[$i];
             $longitude = $flat_operation_area_coordinates_two[$i + 1];
             $operation_area_coordinates_two[] = $latitude . " " . $longitude;
+            $geo_area_two[] = ["latitude" => floatval($latitude), "longitude" => floatval($longitude)];
         }
 
-        $new_start_place_coordinates = [];
-        $new_end_place_coordinates = [];
-        $new_start_place_coordinates[] = $start_place_coordinates["latitude"] . " " . $start_place_coordinates["longitude"];
-        $new_end_place_coordinates[] = $end_place_coordinates["latitude"] . " " . $end_place_coordinates["longitude"];
+        // FIX 1: Parse coordinates — handle both array and JSON-string inputs, and both key variants
+        $start_coords = is_array($start_place_coordinates) ? $start_place_coordinates : json_decode(stripslashes($start_place_coordinates), true);
+        $end_coords   = is_array($end_place_coordinates)   ? $end_place_coordinates   : json_decode(stripslashes($end_place_coordinates), true);
 
-        $pointLocation = new pointLocation();
-        $startInAreaOne = $pointLocation->pointInPolygon($new_start_place_coordinates[0], $operation_area_coordinates_one) !== "outside";
-        $endInAreaOne = $pointLocation->pointInPolygon($new_end_place_coordinates[0], $operation_area_coordinates_one) !== "outside";
-        $startInAreaTwo = $pointLocation->pointInPolygon($new_start_place_coordinates[0], $operation_area_coordinates_two) !== "outside";
-        $endInAreaTwo = $pointLocation->pointInPolygon($new_end_place_coordinates[0], $operation_area_coordinates_two) !== "outside";
+        $start_lat = is_array($start_coords) ? ($start_coords['latitude'] ?? $start_coords['lat'] ?? null) : null;
+        $start_lng = is_array($start_coords) ? ($start_coords['longitude'] ?? $start_coords['lng'] ?? null) : null;
+        $end_lat   = is_array($end_coords)   ? ($end_coords['latitude']   ?? $end_coords['lat']   ?? null) : null;
+        $end_lng   = is_array($end_coords)   ? ($end_coords['longitude']  ?? $end_coords['lng']   ?? null) : null;
+
+        // FIX 2: Close polygons so the ray-cast checks every edge including last→first
+        $closed_one = $operation_area_coordinates_one;
+        if (!empty($closed_one) && $closed_one[0] !== $closed_one[count($closed_one) - 1]) {
+            $closed_one[] = $closed_one[0];
+        }
+        $closed_two = $operation_area_coordinates_two;
+        if (!empty($closed_two) && $closed_two[0] !== $closed_two[count($closed_two) - 1]) {
+            $closed_two[] = $closed_two[0];
+        }
+
+        $new_start = ($start_lat !== null && $start_lng !== null) ? ($start_lat . " " . $start_lng) : "0 0";
+        $new_end   = ($end_lat   !== null && $end_lng   !== null) ? ($end_lat   . " " . $end_lng)   : "0 0";
+
+        $pointLocation  = new pointLocation();
+        $startInAreaOne = $pointLocation->pointInPolygon($new_start, $closed_one) !== "outside";
+        $endInAreaOne   = $pointLocation->pointInPolygon($new_end,   $closed_one) !== "outside";
+        $startInAreaTwo = $pointLocation->pointInPolygon($new_start, $closed_two) !== "outside";
+        $endInAreaTwo   = $pointLocation->pointInPolygon($new_end,   $closed_two) !== "outside";
 
         $startInAreaOne = $startInAreaOne ? "true" : "false";
-        $endInAreaOne = $endInAreaOne ? "true" : "false";
+        $endInAreaOne   = $endInAreaOne   ? "true" : "false";
         $startInAreaTwo = $startInAreaTwo ? "true" : "false";
-        $endInAreaTwo = $endInAreaTwo ? "true" : "false";
+        $endInAreaTwo   = $endInAreaTwo   ? "true" : "false";
+
+        // JS coordinates for geolib fallback (FIX 3)
+        $start_for_js = ($start_lat !== null && $start_lng !== null) ? ["latitude" => floatval($start_lat), "longitude" => floatval($start_lng)] : null;
+        $end_for_js   = ($end_lat   !== null && $end_lng   !== null) ? ["latitude" => floatval($end_lat),   "longitude" => floatval($end_lng)]   : null;
 
         if ($operation_area_geo_direction == "geo-fence-one-direction") {
             if ($startInAreaOne == "true" && $endInAreaTwo == "true") {
@@ -176,6 +201,25 @@ function mptbm_check_transport_area_geo_fence($post_id, $operation_area_id, $sta
                     var selectorClass = `.mptbm_booking_item_${post_id}`;
                     jQuery(selectorClass).removeClass('mptbm_booking_item_hidden');
                     document.cookie = selectorClass + '=' + selectorClass + ";path=/";
+                </script>
+            <?php } else { ?>
+                <script>
+                (function() {
+                    var geoAreaOne  = <?php echo wp_json_encode($geo_area_one); ?>;
+                    var geoAreaTwo  = <?php echo wp_json_encode($geo_area_two); ?>;
+                    var startCoords = <?php echo wp_json_encode($start_for_js); ?>;
+                    var endCoords   = <?php echo wp_json_encode($end_for_js); ?>;
+                    if (startCoords && endCoords && typeof geolib !== 'undefined') {
+                        var sInOne = geolib.isPointInPolygon(startCoords, geoAreaOne);
+                        var eInTwo = geolib.isPointInPolygon(endCoords,   geoAreaTwo);
+                        var eInOne = geolib.isPointInPolygon(endCoords,   geoAreaOne);
+                        if ((sInOne && eInTwo) || (sInOne && eInOne)) {
+                            var selectorClass = '.mptbm_booking_item_<?php echo intval($post_id); ?>';
+                            jQuery(selectorClass).removeClass('mptbm_booking_item_hidden');
+                            document.cookie = selectorClass + '=' + selectorClass + ";path=/";
+                        }
+                    }
+                })();
                 </script>
             <?php }
         } else {
@@ -235,7 +279,27 @@ function mptbm_check_transport_area_geo_fence($post_id, $operation_area_id, $sta
                     document.cookie = selectorClass + '=' + selectorClass + ";path=/";
                 </script>
                 <?php
-            }
+            } else { ?>
+                <script>
+                (function() {
+                    var geoAreaOne  = <?php echo wp_json_encode($geo_area_one); ?>;
+                    var geoAreaTwo  = <?php echo wp_json_encode($geo_area_two); ?>;
+                    var startCoords = <?php echo wp_json_encode($start_for_js); ?>;
+                    var endCoords   = <?php echo wp_json_encode($end_for_js); ?>;
+                    if (startCoords && endCoords && typeof geolib !== 'undefined') {
+                        var sInOne = geolib.isPointInPolygon(startCoords, geoAreaOne);
+                        var eInTwo = geolib.isPointInPolygon(endCoords,   geoAreaTwo);
+                        var sInTwo = geolib.isPointInPolygon(startCoords, geoAreaTwo);
+                        var eInOne = geolib.isPointInPolygon(endCoords,   geoAreaOne);
+                        if ((sInOne && eInTwo) || (sInTwo && eInOne) || (sInOne && eInOne) || (sInTwo && eInTwo)) {
+                            var selectorClass = '.mptbm_booking_item_<?php echo intval($post_id); ?>';
+                            jQuery(selectorClass).removeClass('mptbm_booking_item_hidden');
+                            document.cookie = selectorClass + '=' + selectorClass + ";path=/";
+                        }
+                    }
+                })();
+                </script>
+            <?php }
         }
     }
 }
@@ -247,17 +311,13 @@ function mptbm_check_fixed_distance_area($post_id, $operation_area_id, $start_pl
     $operation_area_type = get_post_meta($operation_area_id, "mptbm-operation-type", true);
     
     // Determine meta key based on operation type
-    $coord_key = '';
     if ($operation_area_type === "geo-matched-operation-area-type") {
         $coord_key = "mptbm-coordinates-four";
-    } elseif ($operation_area_type === "fixed-operation-area-type") {
-        $coord_key = "mptbm-coordinates-three";
     } elseif ($operation_area_type === "geo-fence-operation-area-type") {
         $coord_key = "mptbm-coordinates-one";
-    }
-
-    if (!$coord_key) {
-        return false;
+    } else {
+        // Default: fixed-operation-area-type (single polygon) or unset
+        $coord_key = "mptbm-coordinates-three";
     }
 
     $flat_operation_area_coordinates = get_post_meta($operation_area_id, $coord_key, true);
@@ -271,8 +331,8 @@ function mptbm_check_fixed_distance_area($post_id, $operation_area_id, $start_pl
     }
     // Check if BOTH pickup and dropoff are in polygon
 
-    $start_coords = is_array($start_place_coordinates) ? $start_place_coordinates : json_decode($start_place_coordinates, true);
-    $end_coords = is_array($end_place_coordinates) ? $end_place_coordinates : json_decode($end_place_coordinates, true);
+    $start_coords = is_array($start_place_coordinates) ? $start_place_coordinates : json_decode(stripslashes($start_place_coordinates), true);
+    $end_coords = is_array($end_place_coordinates) ? $end_place_coordinates : json_decode(stripslashes($end_place_coordinates), true);
 
     $start_in_area = false;
     $end_in_area = false;
@@ -305,6 +365,9 @@ function wptbm_get_schedule($post_id, $days_name, $selected_day,$start_time_sche
     }
     if (isset($_SESSION["mptbm_fixed_distance_match_" . $post_id])) {
         unset($_SESSION["mptbm_fixed_distance_match_" . $post_id]);
+    }
+    if (isset($_SESSION["mptbm_operation_area_match_" . $post_id])) {
+        unset($_SESSION["mptbm_operation_area_match_" . $post_id]);
     }
     
     //Get operation area id
@@ -363,8 +426,15 @@ function wptbm_get_schedule($post_id, $days_name, $selected_day,$start_time_sche
                 if ($price_based === 'fixed_distance' || $price_based === 'fixed_map') {
                     $match_type = mptbm_check_fixed_distance_area($post_id, $operation_area_id, $start_place_coordinates, $end_place_coordinates, $price_based);
                     if ($match_type) {
+                        // For fixed_map with 'both in' operation type, only a full match counts
+                        if ($price_based === 'fixed_map' && $transport_operation_type === 'fixed-operation-area-type' && $match_type !== 'full') {
+                            continue;
+                        }
                         $is_in_any_area = true;
                         $_SESSION["mptbm_fixed_distance_match_" . $post_id] = $match_type;
+
+                        $_SESSION["mptbm_operation_area_match_" . $post_id] = $operation_area_id;
+
                         ?>
                         <script>
                             var selectorClass = `.mptbm_booking_item_<?php echo $post_id; ?>`;
@@ -435,7 +505,7 @@ function wptbm_get_schedule($post_id, $days_name, $selected_day,$start_time_sche
             }
 
             if (!$is_in_any_area) {
-                if ($price_based === 'fixed_distance') {
+                if ($price_based === 'fixed_distance' || $price_based === 'fixed_map') {
                     return false;
                 }
                 ?>
@@ -448,11 +518,23 @@ function wptbm_get_schedule($post_id, $days_name, $selected_day,$start_time_sche
             }
         } else {
             // Single operation area
-            if ($price_based === 'fixed_distance') {
+            if ($price_based === 'fixed_distance' || $price_based === 'fixed_map') {
                 $match_type = mptbm_check_fixed_distance_area($post_id, $operation_area_ids, $start_place_coordinates, $end_place_coordinates, $price_based);
                 if ($match_type) {
+                    // For fixed_map with 'both in' operation type, only a full match (both in area) counts
+                    $transport_operation_type_single = get_post_meta($post_id, 'mptbm_operation_area_type', true);
+                    if ($price_based === 'fixed_map' && $transport_operation_type_single === 'fixed-operation-area-type' && $match_type !== 'full') {
+                        return false;
+                    }
                     $is_in_any_area = true;
                     $_SESSION["mptbm_fixed_distance_match_" . $post_id] = $match_type;
+                    ?>
+                    <script>
+                        var selectorClass = `.mptbm_booking_item_<?php echo $post_id; ?>`;
+                        jQuery(selectorClass).removeClass('mptbm_booking_item_hidden');
+                        document.cookie = selectorClass + '=' + selectorClass + ";path=/";
+                    </script>
+                    <?php
                 } else {
                     return false;
                 }
@@ -461,7 +543,7 @@ function wptbm_get_schedule($post_id, $days_name, $selected_day,$start_time_sche
             }
         }
     } else {
-        if ($price_based === 'fixed_distance') {
+        if ($price_based === 'fixed_distance' || $price_based === 'fixed_map') {
             return false;
         }
         ?>

@@ -13,6 +13,8 @@ if (!class_exists('MPTBM_Price_Settings')) {
 		{
 			add_action('add_mptbm_settings_tab_content', [$this, 'price_settings'], 10, 1);
 			add_action('save_post', [$this, 'save_price_settings'], 10, 1);
+
+			add_action('wp_ajax_mptbm_operation_area_price_data_set', [$this, 'mptbm_operation_area_price_data_set']);
 		}
 		public function price_settings($post_id)
 		{
@@ -246,7 +248,73 @@ if (!class_exists('MPTBM_Price_Settings')) {
 						<?php $this->hidden_manual_price_item($location_terms); ?>
 					</div>
 				</section>
-				
+
+                <!-- Operation Area based Pricing -->
+                <section class="bg-light" style="margin-top: 20px;" data-collapse="#mp_fixed_map_routes">
+                    <h6><?php esc_html_e('Operation Area Based Price Set', 'ecab-taxi-booking-manager'); ?></h6>
+                    <span><?php esc_html_e('Set different pricing for each operation area based on transport type, distance, or time. Easily manage fixed, per km, and per hour rates without creating duplicate transports.', 'ecab-taxi-booking-manager'); ?></span>
+                </section>
+                <?php
+                ?>
+                <section class="<?php echo esc_attr($price_based == 'fixed_distance' ? 'mActive' : ''); ?>" data-collapse="#mp_fixed_map_routes">
+                    <input type="hidden" id="mptbm_operation_zones" value='<?php echo json_encode($operation_zones); ?>'>
+
+                    <div id="mptbm_priceContainer">
+
+                        <?php
+                        $pricing = get_post_meta( $post_id, 'mptbm_operation_area_pricing' );
+                        $show_save_btn = 'none';
+                        if ( !empty( $pricing[0] ) ) :
+                            $show_save_btn = 'block';
+                            foreach ($pricing as $key => $values) :
+
+                                foreach ($values as $area_key => $value) :
+
+                                    if( !empty( $value ) ) :
+
+                                       $fixed_price = isset( $value['fixed'] ) ? $value['fixed'] : 0;
+                                       $per_km_price = isset( $value['per_km'] ) ? $value['per_km'] : '';
+                                       $fixed_per_hour = isset( $value['per_hour'] ) ? $value['per_hour'] : '';
+                                        ?>
+
+                                        <div class="row">
+
+                                            <select class="mptbm_areaSelect">
+                                                <option value="">Select Area</option>
+
+                                                <?php foreach ($operation_zones as $key => $name) : ?>
+                                                    <option value="<?php echo esc_attr($key); ?>"
+                                                        <?php selected($area_key, $key); ?>>
+                                                        <?php echo esc_html($name); ?>
+                                                    </option>
+                                                <?php endforeach; ?>
+
+                                            </select>
+
+                                            <input type="number" class="mptbm_area_fixed_price" value="<?php echo esc_attr( $fixed_price ); ?>" placeholder="Fixed Price">
+
+                                            <input type="number" class="mptbm_area_km_price" value="<?php echo esc_attr( $per_km_price ); ?>" placeholder="Per KM">
+
+                                            <input type="number" class="mptbm_area_hour_price" value="<?php echo esc_attr( $fixed_per_hour ); ?>" placeholder="Per Hour">
+
+                                            <button type="button" class="mptbm_area_remove"><?php esc_html_e('Remove', 'ecab-taxi-booking-manager')?></button>
+
+                                        </div>
+                                    <?php endif; ?>
+                            <?php endforeach; ?>
+                            <?php endforeach; ?>
+                        <?php endif; ?>
+
+                    </div>
+
+                    <div class="mptbm_area_based_pricing_set" style="display: flex; justify-content: space-between">
+                        <?php MP_Custom_Layout::add_new_button(esc_html__('Add Area Price', 'ecab-taxi-booking-manager'), 'mptbm_addAreaPrice'); ?>
+                        <button class="mptbm_saveAreaData" id="mptbm_saveAreaData" style="display: <?php echo esc_attr( $show_save_btn );?>"><?php esc_html_e('Save', 'ecab-taxi-booking-manager')?></button>
+                    </div>
+
+<!--                    <button id="mptbm_addAreaPrice" style="float: right">--><?php //esc_html_e('Add Area Price +', 'ecab-taxi-booking-manager')?><!--</button>-->
+                </section>
+
 				<!-- Fixed Map Route Overrides -->
 				<section class="bg-light" style="margin-top: 20px;" data-collapse="#mp_fixed_map_routes">
 					<h6><?php esc_html_e('Fixed Map Route Overrides', 'ecab-taxi-booking-manager'); ?></h6>
@@ -721,6 +789,7 @@ if (!class_exists('MPTBM_Price_Settings')) {
 		}
 		public function save_price_settings($post_id)
 		{
+//            error_log( print_r( [ '$_POSTPrice'  =>$_POST ], true ) );
 			if (
 				!isset($_POST['mptbm_price_settings_nonce']) ||
 				!wp_verify_nonce(sanitize_text_field(wp_unslash($_POST['mptbm_price_settings_nonce'])), 'mptbm_price_settings_action')
@@ -809,11 +878,58 @@ if (!class_exists('MPTBM_Price_Settings')) {
 				}
 				update_post_meta($post_id, 'mptbm_fixed_map_route_price_info', $fixed_map_route_price_infos);
 
+				$mptbm_fixed_map_area_to_area_price_info = array();
+				$start_map_area_to_area_route = isset($_POST['mptbm_fixed_map_route_zone_to_zone_start_location']) ? array_map('sanitize_text_field', $_POST['mptbm_fixed_map_route_zone_to_zone_start_location']) : [];
+				$end_map_area_to_area_route = isset($_POST['mptbm_fixed_map_route_zone_to_zone_end_location']) ? array_map('sanitize_text_field', $_POST['mptbm_fixed_map_route_zone_to_zone_end_location']) : [];
+				$map_route_area_to_area_price = isset($_POST['mptbm_fixed_map_route_zone_to_zone_price']) ? array_map('sanitize_text_field', $_POST['mptbm_fixed_map_route_zone_to_zone_price']) : [];
+
+				if (count($start_map_area_to_area_route) > 0) {
+					$count = 0;
+					foreach ($start_map_area_to_area_route as $key => $location) {
+						$e_route = isset($end_map_area_to_area_route[$key]) ? $end_map_area_to_area_route[$key] : '';
+						$r_price = isset($map_route_area_to_area_price[$key]) ? $map_route_area_to_area_price[$key] : '';
+
+						if ($location && $e_route && $r_price) {
+                            $mptbm_fixed_map_area_to_area_price_info[$count]['start_location'] = $location;
+                            $mptbm_fixed_map_area_to_area_price_info[$count]['end_location'] = $e_route;
+                            $mptbm_fixed_map_area_to_area_price_info[$count]['price'] = $r_price;
+							$count++;
+						}
+					}
+				}
+				update_post_meta( $post_id, 'mptbm_fixed_map_area_to_area_price_info', $mptbm_fixed_map_area_to_area_price_info);
+                $price_display_type = isset($_POST['mptbm_operation_area_fixed_map_type']) ? sanitize_text_field($_POST['mptbm_operation_area_fixed_map_type']) : 'zone_to_location';
+                update_post_meta( $post_id, 'mptbm_operation_area_fixed_map_type', $price_display_type);
+
+				$zone_to_zone_route_price_infos = array();
+				$start_zone_to_zone_route = isset($_POST['mptbm_zone_to_zone_route_start_location']) ? array_map('sanitize_text_field', $_POST['mptbm_zone_to_zone_route_start_location']) : [];
+				$end_zone_to_zone_route = isset($_POST['mptbm_zone_to_zone_route_end_location']) ? array_map('sanitize_text_field', $_POST['mptbm_zone_to_zone_route_end_location']) : [];
+				$zone_to_zone_route_price = isset($_POST['mptbm_zone_to_zone_route_price']) ? array_map('sanitize_text_field', $_POST['mptbm_zone_to_zone_route_price']) : [];
+
+				if (count($start_zone_to_zone_route) > 0) {
+					$count = 0;
+					foreach ($start_zone_to_zone_route as $key => $location) {
+						$e_route = isset($end_zone_to_zone_route[$key]) ? $end_zone_to_zone_route[$key] : '';
+						$r_price = isset($zone_to_zone_route_price[$key]) ? $zone_to_zone_route_price[$key] : '';
+
+						if ($location && $e_route && $r_price) {
+                            $zone_to_zone_route_price_infos[$count]['start_location'] = $location;
+                            $zone_to_zone_route_price_infos[$count]['end_location'] = $e_route;
+                            $zone_to_zone_route_price_infos[$count]['price'] = $r_price;
+							$count++;
+						}
+					}
+				}
+				update_post_meta($post_id, 'mptbm_fixed_zone_price_info', $zone_to_zone_route_price_infos);
+
 				$terms_price_infos = array();
 				$start_terms_location = isset($_POST['mptbm_terms_start_location']) ? array_map('sanitize_text_field', $_POST['mptbm_terms_start_location']) : [];
 				$end_terms_location = isset($_POST['mptbm_terms_end_location']) ? array_map('sanitize_text_field', $_POST['mptbm_terms_end_location']) : [];
 				$terms_price = isset($_POST['mptbm_location_terms_price']) ? array_map('sanitize_text_field', $_POST['mptbm_location_terms_price']) : [];
-				if (sizeof($start_terms_location) > 1 && sizeof($end_terms_location) > 1 && sizeof($terms_price) > 0) {
+
+
+				if (sizeof($start_terms_location) > 0 && sizeof($end_terms_location) > 0 && sizeof($terms_price) > 0) {
+                    
 					$count = 0;
 					foreach ($start_terms_location as $key => $location) {
 						if ($location && $end_terms_location[$key] && $terms_price[$key]) {
@@ -823,7 +939,11 @@ if (!class_exists('MPTBM_Price_Settings')) {
 							$count++;
 						}
 					}
-				}
+                }
+
+
+
+
 				update_post_meta($post_id, 'mptbm_terms_price_info', $terms_price_infos);
 				$waiting_price = isset($_POST['mptbm_waiting_price']) ? sanitize_text_field($_POST['mptbm_waiting_price']) : '';
 				update_post_meta($post_id, 'mptbm_waiting_price', $waiting_price);
@@ -831,8 +951,68 @@ if (!class_exists('MPTBM_Price_Settings')) {
 				update_post_meta($post_id, 'mptbm_price_display_type', $price_display_type);
 				$custom_price_message = isset($_POST['mptbm_custom_price_message']) ? sanitize_textarea_field($_POST['mptbm_custom_price_message']) : '';
 				update_post_meta($post_id, 'mptbm_custom_price_message', $custom_price_message);
+
+                $this->get_area_based_pricing( $post_id, $_POST );
 			}
 		}
+
+        public function get_area_based_pricing( $post_id, $POST ){
+
+            $area_based_pricing = [];
+
+            if (
+                !empty($POST['mptbm_area_based_post']) &&
+                is_array($POST['mptbm_area_based_post'])
+            ) {
+
+                foreach ($POST['mptbm_area_based_post'] as $index => $area_post_id ) {
+                    $area_post_id = trim($area_post_id);
+                    if (empty($area_post_id)) {
+                        continue;
+                    }
+
+                    $area_based_pricing[$area_post_id] = [
+                        'fixed' => isset($POST['mptbm_area_based_fixed'][$index])
+                            ? sanitize_text_field($POST['mptbm_area_based_fixed'][$index])
+                            : '',
+
+                        'per_km' => isset($POST['mptbm_area_based_per_km'][$index])
+                            ? sanitize_text_field($POST['mptbm_area_based_per_km'][$index])
+                            : '',
+
+                        'per_hour' => isset($POST['mptbm_area_based_per_hour'][$index])
+                            ? sanitize_text_field($POST['mptbm_area_based_per_hour'][$index])
+                            : '',
+                    ];
+                }
+            }
+
+            if ( !$post_id ) {
+                wp_send_json_error('Invalid data');
+            }
+
+            update_post_meta( $post_id, 'mptbm_operation_area_pricing', $area_based_pricing);
+
+        }
+
+        function mptbm_operation_area_price_data_set() {
+
+            if (!current_user_can('edit_posts')) {
+                wp_send_json_error('Permission denied');
+            }
+
+            $post_id = isset( $_POST['post_id'] ) ? intval( wp_unslash($_POST['post_id'] ) ) : '';
+            $pricing = json_decode( sanitize_text_field( wp_unslash( $_POST['area_price_data'] ) ), true );
+
+            if ( !$post_id ) {
+                wp_send_json_error('Invalid data');
+            }
+
+            // Save to meta
+            update_post_meta( $post_id, 'mptbm_operation_area_pricing', $pricing);
+
+            wp_send_json_success('Saved successfully');
+        }
 	}
 	new MPTBM_Price_Settings();
 }
