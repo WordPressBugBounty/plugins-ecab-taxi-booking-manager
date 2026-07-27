@@ -16,12 +16,16 @@
 				// twice (duplicate element IDs broke the progress bar).
 				$this->init_api_documentation();
 				add_filter('use_block_editor_for_post_type', [$this, 'disable_gutenberg'], 10, 2);
-				add_filter('wp_mail_content_type', array($this, 'email_content_type'));
-				add_action('upgrader_process_complete', [$this, 'flush_rewrite'], 0);
+				add_action('upgrader_process_complete', [$this, 'flush_rewrite'], 10, 2);
 			}
 			}
-			public function flush_rewrite() {
-				flush_rewrite_rules();
+			public function flush_rewrite($upgrader, $hook_extra) {
+				if (!empty($hook_extra['action']) && 'update' === $hook_extra['action']
+					&& !empty($hook_extra['type']) && 'plugin' === $hook_extra['type']
+					&& !empty($hook_extra['plugins'])
+					&& in_array(plugin_basename(MPTBM_PLUGIN_DIR . '/MPTBM_Plugin.php'), (array) $hook_extra['plugins'], true)) {
+					flush_rewrite_rules();
+				}
 			}
 			private function load_file(): void {
 			require_once MPTBM_PLUGIN_DIR . '/Admin/MPTBM_Dummy_Import.php';
@@ -35,6 +39,9 @@
 
 			require_once MPTBM_PLUGIN_DIR . '/Admin/MPTBM_Transportation.php';
 			require_once MPTBM_PLUGIN_DIR . '/Admin/MPTBM_Rent_Custom_Editor.php';
+			// Limited "Bookings" list (upgrade teaser). Self-instantiates; internally stands
+			// down when the Pro plugin is active so the Pro unified list takes over.
+			require_once MPTBM_PLUGIN_DIR . '/Admin/MPTBM_Booking_List_Free.php';
 
 				
 				//****************Global settings************************//
@@ -51,12 +58,23 @@
                 require_once MPTBM_PLUGIN_DIR . '/Admin/settings/MPTBM_taxi_Date_Advanced_Settings.php';
                 require_once MPTBM_PLUGIN_DIR . '/Admin/settings/MPTBM_AJax_Handler.php';
                 require_once MPTBM_PLUGIN_DIR . '/Admin/settings/MPTBM_Right_Side_Content_Settings.php';
+				//****************Payment settings (WooCommerce / Custom Payment)********** */
+				// Self-instantiating; methods guard WooCommerce availability internally so
+				// the Payments tab renders in both WC and standalone (no-WC) modes.
+				require_once MPTBM_PLUGIN_DIR . '/Admin/MPTBM_WC_Payment_Manager.php';
+				require_once MPTBM_PLUGIN_DIR . '/Admin/settings/MPTBM_Payment_Settings.php';
+				require_once MPTBM_PLUGIN_DIR . '/Admin/MPTBM_Payment_Notice.php';
+				// Standalone, dismissible Pro upsell (free build only).
+				require_once MPTBM_PLUGIN_DIR . '/Admin/MPTBM_Pro_Features_Notice.php';
 				//****************Woocommerce Checkout*********************** */
-				require_once MPTBM_PLUGIN_DIR . '/Admin/MPTBM_Wc_Checkout_Billing.php';
-				require_once MPTBM_PLUGIN_DIR . '/Admin/MPTBM_Wc_Checkout_Fields.php';
-				require_once MPTBM_PLUGIN_DIR . '/Admin/MPTBM_Wc_Checkout_Order.php';
-				require_once MPTBM_PLUGIN_DIR . '/Admin/MPTBM_Wc_Checkout_Settings.php';
-				require_once MPTBM_PLUGIN_DIR . '/Admin/MPTBM_Wc_Checkout_Shipping.php';
+				// WooCommerce checkout integration only loads when WooCommerce is active.
+				if (MP_Global_Function::check_woocommerce() == 1) {
+					require_once MPTBM_PLUGIN_DIR . '/Admin/MPTBM_Wc_Checkout_Billing.php';
+					require_once MPTBM_PLUGIN_DIR . '/Admin/MPTBM_Wc_Checkout_Fields.php';
+					require_once MPTBM_PLUGIN_DIR . '/Admin/MPTBM_Wc_Checkout_Order.php';
+					require_once MPTBM_PLUGIN_DIR . '/Admin/MPTBM_Wc_Checkout_Settings.php';
+					require_once MPTBM_PLUGIN_DIR . '/Admin/MPTBM_Wc_Checkout_Shipping.php';
+				}
 
 			}
 		public function init_api_documentation() {
@@ -69,10 +87,6 @@
 					return false;
 				}
 				return $current_status;
-			}
-			//*************************//
-			public function email_content_type() {
-				return "text/html";
 			}
 		}
 		new MPTBM_Admin();

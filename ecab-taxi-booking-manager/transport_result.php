@@ -26,27 +26,6 @@ if (empty($content)) {
     exit;
 }
 
-// Clear only pricing-related caches to ensure fresh pricing calculations
-// This prevents object caching from showing only minimum-priced vehicles
-// but preserves essential search data
-global $wpdb;
-$cache_patterns = array(
-    'weather_pricing_%',
-    'traffic_data_%',
-    'mptbm_custom_price_message_%'
-);
-
-foreach ($cache_patterns as $pattern) {
-    $wpdb->query($wpdb->prepare(
-        "DELETE FROM {$wpdb->options} WHERE option_name LIKE %s",
-        '_transient_' . $pattern
-    ));
-    $wpdb->query($wpdb->prepare(
-        "DELETE FROM {$wpdb->options} WHERE option_name LIKE %s",
-        '_transient_timeout_' . $pattern
-    ));
-}
-
 // Store content in a variable before unsetting session
 $display_content = $content;
 
@@ -324,10 +303,10 @@ jQuery(document).ready(function($) {
         // Show all vehicles that might be hidden by caching
         $('.mptbm_booking_item').each(function() {
             var $item = $(this);
-            
+
             // Remove any hidden classes that might be applied by caching
             $item.removeClass('mptbm_booking_item_hidden');
-            
+
             // Ensure the item is visible
             $item.show().css({
                 'display': 'flex !important',
@@ -335,23 +314,23 @@ jQuery(document).ready(function($) {
                 'opacity': '1 !important'
             });
         });
-        
+
         // Show any vehicles that might be hidden due to caching
         $('.mptbm_booking_item_hidden').removeClass('mptbm_booking_item_hidden').show();
-        
+
         // If all vehicles were hidden and "No Transport Available" is showing, hide it
         if ($('.mptbm_booking_item:visible').length > 0) {
             $('.geo-fence-no-transport').hide();
         }
-        
+
         // Force refresh of price calculations by triggering mptbm_price_calculation
         if (typeof mptbm_price_calculation === 'function') {
             $('.mptbm_booking_item').each(function() {
                 mptbm_price_calculation($(this));
             });
         }
-        
-        
+
+
     }, 100); // Small delay to ensure DOM is ready
 });
 </script>

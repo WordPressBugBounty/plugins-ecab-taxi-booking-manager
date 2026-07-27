@@ -87,6 +87,174 @@
 
         updateStep(1);
 
+        /* ===============================================================
+           Instant AJAX save + required-field validation.
+           Intercepts the form submit (header "Update" and the last-step
+           footer button both trigger it), validates required fields,
+           jumps to the first missing one, or saves without a reload and
+           shows a success / error toast.
+           =============================================================== */
+        (function () {
+            var $form = $('.mptbm_rent_form');
+            if (!$form.length) { return; }
+
+            var cfg  = window.mptbm_editor_l10n || {};
+            var i18n = cfg.i18n || {};
+
+            // ---- Toast ----
+            function dismissToast($t) {
+                $t.removeClass('is-show');
+                setTimeout(function () { $t.remove(); }, 300);
+            }
+            function showToast(type, message) {
+                $('.mptbm_toast').each(function () { dismissToast($(this)); });
+                var isOk = type === 'success';
+                var icon = isOk
+                    ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>'
+                    : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>';
+                var $t = $('<div class="mptbm_toast ' + (isOk ? 'mptbm_toast_success' : 'mptbm_toast_error') + '" role="status" aria-live="polite"></div>');
+                $t.html('<span class="mptbm_toast_icon">' + icon + '</span><span class="mptbm_toast_msg"></span>');
+                $t.find('.mptbm_toast_msg').text(message || '');
+                $('body').append($t);
+                $t[0].offsetHeight; // reflow so the transition plays
+                $t.addClass('is-show');
+                var timer = setTimeout(function () { dismissToast($t); }, 4200);
+                $t.on('click', function () { clearTimeout(timer); dismissToast($t); });
+            }
+
+            // ---- Required-field helpers ----
+            function fieldLabel(el) {
+                var $el = $(el), id = $el.attr('id'), txt = '';
+                if (id) { txt = $('label[for="' + id + '"]').first().clone().children().remove().end().text(); }
+                if (!txt) { txt = $el.closest('.mptbm_rent_field_group, .mptbm_taxi_field, .mptbm_taxi_form_group, .formGroup').find('label').first().clone().children().remove().end().text(); }
+                if (!txt) { txt = $el.attr('placeholder') || $el.attr('name') || ''; }
+                return $.trim(txt).replace(/\*+\s*$/, '').trim();
+            }
+            function isEmptyField(el) {
+                var $el = $(el), type = (el.type || '').toLowerCase();
+                if (type === 'checkbox' || type === 'radio') {
+                    var name = $el.attr('name');
+                    return name ? $form.find('input[name="' + name + '"]:checked').length === 0 : !el.checked;
+                }
+                return $.trim($el.val() || '') === '';
+            }
+            // Skip hidden inputs, disabled/readonly controls, self-hidden fields,
+            // and required fields inside a collapsed sub-section (unreachable) —
+            // only the wizard-step wrapper being hidden should not disqualify.
+            function isValidatable(el) {
+                var $el = $(el), type = (el.type || '').toLowerCase();
+                if (type === 'hidden' || el.disabled || el.readOnly) { return false; }
+                if ($el.css('display') === 'none') { return false; }
+                var $step = $el.closest('[data-step]');
+                var reachable = true;
+                $el.parentsUntil($step).each(function () {
+                    if ($(this).css('display') === 'none') { reachable = false; return false; }
+                });
+                return reachable;
+            }
+            function firstInvalidRequired() {
+                var found = null;
+                $form.find('[required]').each(function () {
+                    if (!isValidatable(this)) { return; }
+                    if (isEmptyField(this)) { found = this; return false; }
+                });
+                return found;
+            }
+            function goToField(el) {
+                var $el = $(el);
+                var step = parseInt($el.closest('[data-step]').data('step'), 10);
+                if (step >= 1) { updateStep(step); }
+                $el.addClass('mptbm_field_error');
+                var $header = $('.mptbm_fixed_header');
+                var offset = ($header.length ? $header.outerHeight() : 0) + 24;
+                $('html, body').animate({ scrollTop: Math.max(0, $el.offset().top - offset) }, 300, function () {
+                    try { $el.trigger('focus'); } catch (e) {}
+                });
+            }
+            $form.on('input change', '.mptbm_field_error', function () {
+                $(this).removeClass('mptbm_field_error');
+            });
+
+            // ---- Saving state ----
+            var $saveBtns = $('.mptbm_header_right').find('input[type="submit"], .button-primary');
+            function setSaving(on) {
+                $form.toggleClass('mptbm_is_saving', on);
+                if (on) {
+                    $saveBtns.each(function () {
+                        var $b = $(this);
+                        if ($b.data('mptbmLabel') == null) { $b.data('mptbmLabel', $b.is('input') ? $b.val() : $b.text()); }
+                        if ($b.is('input')) { $b.val(i18n.saving || 'Saving…'); } else { $b.text(i18n.saving || 'Saving…'); }
+                    }).prop('disabled', true);
+                } else {
+                    $saveBtns.each(function () {
+                        var $b = $(this), lbl = $b.data('mptbmLabel');
+                        if (lbl != null) { if ($b.is('input')) { $b.val(lbl); } else { $b.text(lbl); } }
+                    }).prop('disabled', false);
+                }
+            }
+
+            // ---- Submit ----
+            var submitting = false;
+            $form.on('submit', function (e) {
+                e.preventDefault();
+                if (submitting) { return; }
+
+                var invalid = firstInvalidRequired();
+                if (invalid) {
+                    goToField(invalid);
+                    var name = fieldLabel(invalid);
+                    var msg = name
+                        ? (i18n.required || 'Please complete the required field: %s').replace('%s', name)
+                        : (i18n.required_generic || 'Please complete the highlighted required field.');
+                    showToast('error', msg);
+                    return;
+                }
+
+                if (window.tinyMCE && window.tinyMCE.triggerSave) { try { window.tinyMCE.triggerSave(); } catch (err) {} }
+
+                var fd = new FormData(this);
+                fd.set('action', cfg.action || 'mptbm_ajax_save_rent');
+
+                submitting = true;
+                setSaving(true);
+
+                $.ajax({
+                    url: cfg.ajax_url || window.ajaxurl,
+                    type: 'POST',
+                    data: fd,
+                    processData: false,
+                    contentType: false,
+                    dataType: 'json'
+                }).done(function (res) {
+                    if (res && res.success) {
+                        var d = res.data || {};
+                        showToast('success', d.message || i18n.saved);
+                        if (d.title) { $('.mptbm_page_title').text(d.title); }
+                        if (d.status_slug) {
+                            $('.mptbm_status_pill')
+                                .removeClass('is-publish is-draft is-pending is-private')
+                                .addClass('is-' + d.status_slug)
+                                .text(d.status_label || '');
+                        }
+                        if (d.post_id) { $('input[name="post_id"]').val(d.post_id); }
+                    } else {
+                        var d2 = (res && res.data) || {};
+                        showToast('error', d2.message || i18n.network_error);
+                        if (d2.field) {
+                            var $f = $form.find('[name="' + d2.field + '"]').first();
+                            if ($f.length) { goToField($f[0]); }
+                        }
+                    }
+                }).fail(function (xhr) {
+                    if (window.console) { console.error('[MPTBM] save failed', xhr && xhr.status, xhr && xhr.responseText); }
+                    showToast('error', i18n.network_error || 'Could not save. Please try again.');
+                }).always(function () {
+                    submitting = false;
+                    setSaving(false);
+                });
+            });
+        })();
+
         $('.mptbm_taxi_toggle_trigger').on('change', function() {
             const isChecked = $(this).is(':checked');
             const $parentSection = $(this).closest('.mptbm_taxi_toggle_box');
@@ -188,6 +356,20 @@
             }
 
             // $(this).closest('.mptbm_taxi_feature_switch').find('span').text(isChecked ? 'ON' : 'OFF');
+        });
+
+        // 1. Customer Reviews Toggle Functionality
+        $('#mptbm_show_reviews').on('change', function(e) {
+            e.preventDefault();
+            const isChecked = $(this).is(':checked');
+            const $switchText = $(this).closest('.mptbm_taxi_feature_header').find('.mptbm_taxi_feature_switch_text');
+            if (isChecked) {
+                $('.mptbm_reviews_manage_body').fadeIn();
+                $switchText.text('On');
+            } else {
+                $('.mptbm_reviews_manage_body').fadeOut();
+                $switchText.text('Off');
+            }
         });
 
         $(document).on('click', '.mptbm_taxi_feature_btn_del', function(e) {
@@ -393,6 +575,11 @@
         $(document).on('click','.mptbm_taxi_pricing_add_route_btn', function() {
             var tr = $('.mptbm_taxi_pricing_route_list tr:first').clone();
             tr.find('input').val('');
+            // The cloned row must start blank, not carry over the first row's
+            // already-picked Start/End Zone (and any disabled/hidden options
+            // that were applied to it by the duplicate/cross-type filtering).
+            tr.find('select').val('');
+            tr.find('select option').prop('disabled', false).show();
             tr.find('input, select, textarea').prop('disabled', false);
             $('.mptbm_taxi_pricing_route_list').append(tr);
         });
@@ -400,6 +587,8 @@
         $(document).on('click','.mptbm_taxi_pricing_add_zone_to_zone_route_btn', function() {
             var tr = $('.mptbm_taxi_pricing_zone_to_zone_route_list tr:first').clone();
             tr.find('input').val('');
+            tr.find('select').val('');
+            tr.find('select option').prop('disabled', false).show();
             tr.find('input, select, textarea').prop('disabled', false);
             $('.mptbm_taxi_pricing_zone_to_zone_route_list').append(tr);
         });
@@ -407,6 +596,8 @@
         $(document).on('click', '.mptbm_taxi_pricing_add_zone_btn', function() {
             var tr = $('.mptbm_taxi_pricing_fixed_zone_route_list tr:first').clone();
             tr.find('input').val('');
+            tr.find('select').val('');
+            tr.find('select option').prop('disabled', false).show();
             tr.find('input, select, textarea').prop('disabled', false);
             $('.mptbm_taxi_pricing_fixed_zone_route_list').append(tr);
         });
@@ -940,29 +1131,10 @@
         // updatePricingContainer();
 
         function handleGroup(selector) {
-            let selectedValues = [];
-
-            // collect selected values (only same group)
-            $(selector).each(function () {
-                let val = $(this).val();
-                if (val) {
-                    selectedValues.push(val);
-                }
-            });
-
-            // reset options (only same group)
+            // No cross-row restriction: a Zone or Location may be used as Start in as many
+            // rows as needed (each row's End defines a different destination/price for it).
+            // The only thing enforced per row is Start != End, handled in filterEndSelect().
             $(selector).find('option').prop('disabled', false);
-
-            // disable duplicates inside same group
-            $(selector).each(function () {
-                let current = $(this);
-
-                selectedValues.forEach(function (value) {
-                    current.find('option[value="' + value + '"]')
-                        .not(':selected')
-                        .prop('disabled', true);
-                });
-            });
         }
 
         function updateSelections() {
@@ -1234,10 +1406,20 @@
             }
         });
 
-        // 2. Delete Row Functionality
+        // 2. Extra Service dropdown change (predefined vs custom)
         $(document).on('change', '#mptbm_extra_services_id', function(e) {
-            let service_id = $(this).val();
+            let $select = $(this);
+            let service_id = $select.val();
+            let post_id = $('input[name="post_id"]').val();
             let nonce = $('#mptbm_extra_service_nonce').val();
+
+            // "Custom" option's value is the vehicle's own post ID, not a
+            // mptbm_extra_services post, so restore its own saved rows locally
+            // instead of hitting the server (which would reject it as invalid).
+            if (!service_id || service_id === post_id) {
+                $("#mptbm_taxi_ex_service_tbody").html($('#mptbm_taxi_ex_service_custom_template').html());
+                return;
+            }
 
             $.ajax({
                 url: ajaxurl,
@@ -1245,12 +1427,18 @@
                 data: {
                     action: 'mptbm_get_services_data',
                     service_id: service_id,
-                    post_id: 37,
+                    post_id: post_id,
                     nonce: nonce
                 },
                 success: function (response) {
-                    console.log(response);
-                    $("#mptbm_taxi_ex_service_tbody").html(response.data.service_date);
+                    if (response && response.success) {
+                        $("#mptbm_taxi_ex_service_tbody").html(response.data.service_date);
+                    } else {
+                        console.error('mptbm: failed to load extra service data', response);
+                    }
+                },
+                error: function (xhr) {
+                    console.error('mptbm: extra service AJAX request failed', xhr);
                 }
             });
 
@@ -1393,24 +1581,44 @@
 
         /**
          * 3. Driver Selection Update
-         * Updates the info box when a different driver is selected.
+         * Loads the selected driver's info via AJAX and fills the info box.
          */
-        $('.mptbm_taxi_advanced_driver_select_row select').on('change', function(e) {
+        $(document).on('change', '#mptbm_selected_driver', function(e) {
             e.preventDefault();
-            const selectedDriver = $(this).val();
+            const $select = $(this);
+            const driverId = $select.val();
             const $infoBox = $('.mptbm_taxi_advanced_driver_info_box');
 
-            // Example data mapping
-            const driverData = {
-                "John Conner": { username: "John", email: "eyesblade30@gmail.com" },
-                "Sarah Connor": { username: "SarahC", email: "sarah.c@sky.net" }
-            };
-
-            if (driverData[selectedDriver]) {
-                $infoBox.find('.mptbm_taxi_advanced_info_col:eq(0) p').text(selectedDriver);
-                $infoBox.find('.mptbm_taxi_advanced_info_col:eq(1) p').text(driverData[selectedDriver].username);
-                $infoBox.find('.mptbm_taxi_advanced_info_col:eq(2) p').text(driverData[selectedDriver].email);
+            if (!driverId) {
+                $infoBox.hide();
+                $infoBox.find('.mptbm_taxi_advanced_info_col:eq(0) p').text('');
+                $infoBox.find('.mptbm_taxi_advanced_info_col:eq(1) p').text('');
+                $infoBox.find('.mptbm_taxi_advanced_info_col:eq(2) p').text('');
+                return;
             }
+
+            const nonce = $('input[name="mptbm_transportation_type_nonce"]').val();
+
+            $select.prop('disabled', true);
+
+            $.post(mptbm_editor_l10n.ajax_url, {
+                action: 'mptbm_get_driver_info',
+                driver_id: driverId,
+                nonce: nonce
+            }).done(function(response) {
+                if (response && response.success) {
+                    $infoBox.find('.mptbm_taxi_advanced_info_col:eq(0) p').text(response.data.name);
+                    $infoBox.find('.mptbm_taxi_advanced_info_col:eq(1) p').text(response.data.username);
+                    $infoBox.find('.mptbm_taxi_advanced_info_col:eq(2) p').text(response.data.email);
+                    $infoBox.show();
+                } else {
+                    $infoBox.hide();
+                }
+            }).fail(function() {
+                $infoBox.hide();
+            }).always(function() {
+                $select.prop('disabled', false);
+            });
         });
 
         /**
@@ -1710,10 +1918,29 @@
         }
     }
     function filterEndSelect($startSelect, isInit = false) {
-
+        // Allowed pairs in this tab: Zone→Location, Location→Location, Location→Zone.
+        // Zone→Zone is excluded here (that combination belongs in the dedicated
+        // "Zone To Zone" tab), so when Start is an Operation Area, End must be a Location.
+        // When Start is a Location, End may be either a Location or an Operation Area.
         var $row       = $startSelect.closest('tr');
         var $endSelect = $row.find('.mptbm_fixed_map_route_end_location');
         var startType  = getType($startSelect.val());
+        var startVal   = $startSelect.val();
+
+        // Collect exact (start -> end) pairs already used by OTHER rows, so the
+        // same route can't be added twice (a Start reused with a DIFFERENT End is fine).
+        var usedPairs = [];
+        $('.mptbm_fixed_map_route_start_location').each(function () {
+            var $otherRow = $(this).closest('tr');
+            if ($otherRow.is($row)) {
+                return;
+            }
+            var otherStart = $(this).val();
+            var otherEnd   = $otherRow.find('.mptbm_fixed_map_route_end_location').val();
+            if (otherStart && otherEnd) {
+                usedPairs.push(otherStart + '|' + otherEnd);
+            }
+        });
 
         $endSelect.find('option').each(function () {
             var $opt    = $(this);
@@ -1724,13 +1951,12 @@
                 return;
             }
 
-            var shouldHide = false;
-
-            if (startType === 'post') {
-                shouldHide = (optType === 'post');
-            } else if (startType === 'term') {
-                shouldHide = (optType === 'term');
-            }
+            // Zone→Zone is excluded (belongs in the "Zone To Zone" tab), a route can't
+            // start and end at the same Zone/Location, and the exact same Start→End
+            // pair can't be added twice across rows.
+            var shouldHide = (startType === 'post' && optType === 'post')
+                || ($opt.val() === startVal)
+                || (usedPairs.indexOf(startVal + '|' + $opt.val()) !== -1);
 
             $opt.prop('disabled', shouldHide).toggle(!shouldHide);
         });
@@ -1763,6 +1989,17 @@
             }
         }
     );
+
+    // If an End Zone changes, other rows' available End options may need to
+    // reflect the newly-used pair too (their own selection isn't forced, only
+    // what remains selectable going forward).
+    $(document).on('change', '.mptbm_fixed_map_route_end_location', function () {
+        $('.mptbm_fixed_map_route_start_location').each(function () {
+            if ($(this).val()) {
+                filterEndSelect($(this), true);
+            }
+        });
+    });
 
     $(function () {
         $('.mptbm_fixed_map_route_start_location').each(function () {

@@ -3,7 +3,7 @@
  * Plugin Name: E-cab Taxi Booking Manager for Woocommerce
  * Plugin URI: https://wordpress.org/plugins/ecab-taxi-booking-manager/
  * Description: A Complete Transportation Solution for WordPress by MagePeople.
- * Version: 2.0.3
+ * Version: 2.0.5
  * Author: MagePeople Team
  * Author URI: http://www.mage-people.com/
  * License: GPL v2 or later
@@ -24,6 +24,8 @@ if (!class_exists('MPTBM_Plugin')) {
             add_filter('theme_page_templates', array($this, 'mptbm_on_activation_template_create'), 10, 3);
             add_filter('template_include', array($this, 'mptbm_change_page_template'), 99);
             add_action('admin_init', array($this, 'wptbm_assign_template_to_page'));
+			add_action('init', array(__CLASS__, 'maybe_upgrade_security_capabilities'), 1);
+			add_action('init', array(__CLASS__, 'maybe_upgrade_api_schema'), 2);
             add_action('wp_enqueue_scripts', array($this, 'enqueue_frontend_assets'));
             
             // Hook to automatically assign template when settings are saved
@@ -49,7 +51,7 @@ if (!class_exists('MPTBM_Plugin')) {
                 // define('MPTBM_PLUGIN_DATA', get_plugin_data(__FILE__));
             }
             if (!defined('MPTBM_PLUGIN_VERSION')) {
-                define('MPTBM_PLUGIN_VERSION', '1.2.1');
+                define('MPTBM_PLUGIN_VERSION', '2.0.4');
             }
 
             // Create required directories if they don't exist
@@ -65,32 +67,32 @@ if (!class_exists('MPTBM_Plugin')) {
             }
 
             require_once MPTBM_PLUGIN_DIR . '/mp_global/MP_Global_File_Load.php';
+
+            // WooCommerce is now OPTIONAL. The core plugin (CPT, settings, booking
+            // search & pricing) always loads. WooCommerce-specific integration is
+            // gated by MP_Global_Function::check_woocommerce() here and inside the
+            // Admin/Frontend/Dependencies loaders, so the plugin runs standalone too.
+            add_action('activated_plugin', array($this, 'activation_redirect'), 90, 1);
+            require_once MPTBM_PLUGIN_DIR . '/inc/MPTBM_Dependencies.php';
+            require_once MPTBM_PLUGIN_DIR . '/inc/MPTBM_Geo_Lib.php';
+
+            // Load Block Editor Integration (does not require WooCommerce)
+            if (function_exists('register_block_type')) {
+                require_once MPTBM_PLUGIN_DIR . '/Frontend/MPTBM_Block.php';
+                add_action('enqueue_block_editor_assets', array($this, 'enqueue_block_editor_assets'));
+            }
+
+            // Load Elementor Integration (does not require WooCommerce)
+            add_action('elementor/widgets/register', array($this, 'register_elementor_widget'));
+            add_action('elementor/elements/categories_registered', array($this, 'add_elementor_widget_category'));
+
             if (MP_Global_Function::check_woocommerce() == 1) {
-                add_action('activated_plugin', array($this, 'activation_redirect'), 90, 1);
-                self::on_activation_page_create();
-                require_once MPTBM_PLUGIN_DIR . '/inc/MPTBM_Dependencies.php';
-                require_once MPTBM_PLUGIN_DIR . '/inc/MPTBM_Geo_Lib.php';
-				
-
-                // Load Block Editor Integration
-                if (function_exists('register_block_type')) {
-                    require_once MPTBM_PLUGIN_DIR . '/Frontend/MPTBM_Block.php';
-                    add_action('enqueue_block_editor_assets', array($this, 'enqueue_block_editor_assets'));
-                }
-
-                // Load Elementor Integration
-                add_action('elementor/widgets/register', array($this, 'register_elementor_widget'));
-                add_action('elementor/elements/categories_registered', array($this, 'add_elementor_widget_category'));
-
-                // Always load the checkout fields helper on frontend
+                // WooCommerce active: load the WC checkout-fields helper on frontend.
                 require_once MPTBM_PLUGIN_DIR . '/Frontend/MPTBM_Wc_Checkout_Fields_Helper.php';
-            } else {
-                // WooCommerce missing: the memory-safe chunked installer popup
-                // (auto-shown on the dashboard / plugins / our screens) handles
-                // installing & activating WooCommerce. No Quick Setup wizard needed.
-                if (is_admin()) {
-                    require_once MPTBM_PLUGIN_DIR . '/Admin/MPTBM_Woo_Installer.php';
-                }
+            } elseif (is_admin()) {
+                // WooCommerce missing: still offer the (optional, non-blocking) installer
+                // popup so admins can add WooCommerce if they want the WC checkout flow.
+                require_once MPTBM_PLUGIN_DIR . '/Admin/MPTBM_Woo_Installer.php';
             }
         }
 
@@ -167,8 +169,37 @@ if (!class_exists('MPTBM_Plugin')) {
                 }
             }
 
-            flush_rewrite_rules();
         }
+
+		public static function grant_management_capabilities(): void
+		{
+			foreach (array('administrator', 'shop_manager') as $role_name) {
+				$role = get_role($role_name);
+				if ($role) {
+					$role->add_cap('manage_mptbm_transportation');
+				}
+			}
+			update_option('mptbm_security_capabilities_version', '2', false);
+		}
+
+		public static function maybe_upgrade_security_capabilities(): void
+		{
+			if ('2' !== get_option('mptbm_security_capabilities_version')) {
+				self::grant_management_capabilities();
+				global $wpdb;
+				// WordPress truncates the former 21-character slug to 20 characters.
+				// Migrate those legacy rows to the valid canonical CPT slug.
+				$wpdb->update($wpdb->posts, array('post_type' => 'mptbm_service_book'), array('post_type' => 'mptbm_service_bookin'), array('%s'), array('%s'));
+			}
+		}
+
+		public static function maybe_upgrade_api_schema(): void
+		{
+			if ('2' !== get_option('mptbm_api_schema_version')) {
+				self::create_api_tables();
+				update_option('mptbm_api_schema_version', '2', false);
+			}
+		}
         
         public static function create_api_tables(): void
         {
@@ -184,7 +215,7 @@ if (!class_exists('MPTBM_Plugin')) {
                 id int(11) NOT NULL AUTO_INCREMENT,
                 user_id int(11) NOT NULL,
                 api_key varchar(64) NOT NULL,
-                api_secret varchar(64) NOT NULL,
+                api_secret varchar(255) NOT NULL,
                 name varchar(200) NOT NULL,
                 permissions text,
                 last_used datetime DEFAULT NULL,
@@ -227,10 +258,64 @@ if (!class_exists('MPTBM_Plugin')) {
             
             // Create API tables
             self::create_api_tables();
+
+			// Restrict transportation configuration to trusted store managers.
+			self::grant_management_capabilities();
             
             // Flush rewrite rules
             flush_rewrite_rules();
         }
+
+		public static function on_plugin_deactivation(): void
+		{
+			wp_clear_scheduled_hook('mptbm_cleanup_api_logs');
+			flush_rewrite_rules();
+		}
+
+		public static function uninstall(): void
+		{
+			global $wpdb;
+			wp_clear_scheduled_hook('mptbm_cleanup_api_logs');
+			foreach (array('administrator', 'shop_manager') as $role_name) {
+				$role = get_role($role_name);
+				if ($role) {
+					$role->remove_cap('manage_mptbm_transportation');
+				}
+			}
+			delete_option('mptbm_security_capabilities_version');
+			delete_option('mptbm_api_schema_version');
+
+			$wpdb->query("DROP TABLE IF EXISTS `{$wpdb->prefix}mptbm_api_keys`"); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+			$wpdb->query("DROP TABLE IF EXISTS `{$wpdb->prefix}mptbm_api_logs`"); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+
+			$auto_pages = array(
+				'transport_booking'              => '[mptbm_booking]',
+				'transport_booking_manual'       => '[mptbm_booking price_based="manual" form="inline"]',
+				'transport_booking_fixed_hourly' => '[mptbm_booking price_based="fixed_hourly"]',
+				'transport-tabs'                 => '[mptbm_booking tab="yes" tabs="hourly,distance,manual"]',
+			);
+			foreach ($auto_pages as $slug => $content) {
+				$page = get_page_by_path($slug, OBJECT, 'page');
+				if ($page && trim((string) $page->post_content) === $content) {
+					wp_delete_post($page->ID, true);
+				}
+			}
+			$result_page = get_page_by_path('transport-result', OBJECT, 'page');
+			if ($result_page && trim((string) $result_page->post_content) === '' && get_page_template_slug($result_page->ID) === 'transport_result.php') {
+				wp_delete_post($result_page->ID, true);
+			}
+
+			$confirmation_page = absint(get_option('mptbm_confirmation_page_auto'));
+			if ($confirmation_page && has_shortcode((string) get_post_field('post_content', $confirmation_page), 'mptbm_booking_confirmation')) {
+				wp_delete_post($confirmation_page, true);
+			}
+			$payment_settings = get_option('mptbm_payment_settings', array());
+			if (is_array($payment_settings) && absint($payment_settings['mptbm_confirmation_page_id'] ?? 0) === $confirmation_page) {
+				unset($payment_settings['mptbm_confirmation_page_id']);
+				update_option('mptbm_payment_settings', $payment_settings);
+			}
+			delete_option('mptbm_confirmation_page_auto');
+		}
 
         public function mptbm_on_activation_template_create($templates)
         {
@@ -239,7 +324,6 @@ if (!class_exists('MPTBM_Plugin')) {
             foreach ($page_templates as $tk => $tv) {
                 $templates[$tk] = $tv;
             }
-            flush_rewrite_rules();
             return $templates;
         }
 
@@ -258,8 +342,6 @@ if (!class_exists('MPTBM_Plugin')) {
 
         public function wptbm_assign_template_to_page()
         {
-            flush_rewrite_rules();
-            
             // Get the search result page slug from settings
             $search_result_slug = MP_Global_Function::get_settings('mptbm_general_settings', 'enable_view_search_result_page');
             
@@ -270,7 +352,7 @@ if (!class_exists('MPTBM_Plugin')) {
             
             // Check if the page exists
             $page = get_page_by_path($search_result_slug);
-            if ($page) {
+            if ($page && get_page_template_slug($page->ID) !== 'transport_result.php') {
                 // Update the page meta to assign the template
                 update_post_meta($page->ID, '_wp_page_template', 'transport_result.php');
             }
@@ -451,6 +533,8 @@ if (!class_exists('MPTBM_Plugin')) {
 
     // Register activation hook
     register_activation_hook(__FILE__, array('MPTBM_Plugin', 'on_plugin_activation'));
+	register_deactivation_hook(__FILE__, array('MPTBM_Plugin', 'on_plugin_deactivation'));
+	register_uninstall_hook(__FILE__, array('MPTBM_Plugin', 'uninstall'));
     
     new MPTBM_Plugin();
 }

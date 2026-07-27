@@ -12,6 +12,7 @@ if (!class_exists('MPTBM_Rent_Custom_Editor')) {
         public function __construct() {
             add_action('admin_menu', [$this, 'register_menu']);
             add_action('admin_post_save_mptbm_rent', [$this, 'save_post']);
+            add_action('wp_ajax_mptbm_ajax_save_rent', [$this, 'ajax_save_rent']);
             add_action('admin_init', [$this, 'redirect_default_editor']);
             add_action('admin_init', [$this, 'redirect_add_new']);
 
@@ -120,6 +121,19 @@ if (!class_exists('MPTBM_Rent_Custom_Editor')) {
 
                 $inclusive_manual_locations = isset($_POST['mptbm_inclusive_manual_locations']) ? 'on' : 'off';
                 update_post_meta( $post_id, 'mptbm_inclusive_manual_locations', $inclusive_manual_locations );
+
+                if ( get_post_type( $post_id ) === 'mptbm_rent' && isset( $_POST['mptbm_availability_status_field_present'] ) ) {
+                    $availability_status = isset( $_POST['mptbm_availability_status'] ) ? 'unavailable' : 'available';
+                    update_post_meta( $post_id, 'mptbm_availability_status', $availability_status );
+
+                    $allowed_reasons = [ 'maintenance', 'booked', 'accident', 'repair', 'cleaning', 'driver_unavailable', 'other' ];
+                    $reason = isset( $_POST['mptbm_availability_reason'] ) ? sanitize_text_field( wp_unslash( $_POST['mptbm_availability_reason'] ) ) : 'maintenance';
+                    $reason = in_array( $reason, $allowed_reasons, true ) ? $reason : 'maintenance';
+                    update_post_meta( $post_id, 'mptbm_availability_reason', $reason );
+
+                    $reason_note = $reason === 'other' && isset( $_POST['mptbm_availability_reason_note'] ) ? sanitize_text_field( wp_unslash( $_POST['mptbm_availability_reason_note'] ) ) : '';
+                    update_post_meta( $post_id, 'mptbm_availability_reason_note', $reason_note );
+                }
             }
 
         }
@@ -273,7 +287,7 @@ if (!class_exists('MPTBM_Rent_Custom_Editor')) {
                     </div>
                 </div>
 
-                <form class="mptbm_rent_form" method="post" action="<?php echo admin_url('admin-post.php'); ?>">
+                <form class="mptbm_rent_form" method="post" action="<?php echo admin_url('admin-post.php'); ?>" novalidate>
 
                     <input type="hidden" name="editor_type" value="custom">
 
@@ -282,7 +296,28 @@ if (!class_exists('MPTBM_Rent_Custom_Editor')) {
                     <input type="hidden" name="post_id" value="<?php echo esc_attr($post_id); ?>">
 
                     <?php wp_nonce_field('save_mptbm_rent_nonce');
-                    $add_url   = admin_url('admin.php?page=mptbm-rent-edit');
+                    $add_url = admin_url('admin.php?page=mptbm-rent-edit');
+                    $list_url = admin_url('admin.php?page=mptbm_transportation_lists');
+
+                    // Status pill next to the title.
+                    switch (get_post_status($post_id)) {
+                        case 'publish':
+                            $status_slug = 'publish';
+                            $status_label = __('Published', 'ecab-taxi-booking-manager');
+                            break;
+                        case 'pending':
+                            $status_slug = 'pending';
+                            $status_label = __('Pending', 'ecab-taxi-booking-manager');
+                            break;
+                        case 'private':
+                            $status_slug = 'private';
+                            $status_label = __('Private', 'ecab-taxi-booking-manager');
+                            break;
+                        default:
+                            $status_slug = 'draft';
+                            $status_label = __('Draft', 'ecab-taxi-booking-manager');
+                            break;
+                    }
                     ?>
 
                     <!-- FIXED HEADER -->
@@ -290,35 +325,34 @@ if (!class_exists('MPTBM_Rent_Custom_Editor')) {
 
                         <div class="mptbm_fixed_header_top">
 
-                            <div class="">
-                                <a class="mptbm-link" href="<?php echo admin_url('admin.php?page=mptbm_transportation_lists'); ?>">
-                                    <span class="dashicons dashicons-arrow-left-alt"></span>
-                                    <?php esc_html_e( 'Back to Transports', 'ecab-taxi-booking-manager' ); ?>
+                            <div class="mptbm_header_lead">
+                                <a class="mptbm_back_btn" href="<?php echo esc_url($list_url); ?>" title="<?php esc_attr_e('Back to Transports', 'ecab-taxi-booking-manager'); ?>" aria-label="<?php esc_attr_e('Back to Transports', 'ecab-taxi-booking-manager'); ?>">
+                                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
                                 </a>
 
-                                <a class="mptbm-add-btn" href="<?php echo esc_url($add_url); ?>">
-                                    <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-                                    <?php esc_html_e('Add New Transportation', 'ecab-taxi-booking-manager'); ?>
-                                </a>
-                            </div>
-
-
-
-                            <div class="mptbm_header_left">
-                                <h1 class="mptbm_page_title">
-                                    <?php echo esc_html($title); ?>
-                                </h1>
+                                <div class="mptbm_header_titlewrap">
+                                    <span class="mptbm_header_eyebrow">
+                                        <?php esc_html_e('Transportation', 'ecab-taxi-booking-manager'); ?>
+                                        <span class="mptbm_status_pill is-<?php echo esc_attr($status_slug); ?>"><?php echo esc_html($status_label); ?></span>
+                                    </span>
+                                    <h1 class="mptbm_page_title">
+                                        <?php echo esc_html($title ? $title : __('Untitled transportation', 'ecab-taxi-booking-manager')); ?>
+                                    </h1>
+                                </div>
                             </div>
 
                             <div class="mptbm_header_right">
-
-                                <?php
-                                submit_button($post_id ? 'Update' : 'Publish', 'primary', '', false); ?>
-                                
-                                <a href="<?php echo esc_url($old_editor_url); ?>" class="button">
-                                    <?php esc_html_e( 'Open classic Editor', 'ecab-taxi-booking-manager' ); ?>
+                                <a class="mptbm-add-btn" href="<?php echo esc_url($add_url); ?>" title="<?php esc_attr_e('Add New Transportation', 'ecab-taxi-booking-manager'); ?>">
+                                    <svg width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                                    <span class="mptbm_btn_label"><?php esc_html_e('Add New', 'ecab-taxi-booking-manager'); ?></span>
                                 </a>
 
+                                <a href="<?php echo esc_url($old_editor_url); ?>" class="button mptbm_btn_ghost" title="<?php esc_attr_e('Open classic Editor', 'ecab-taxi-booking-manager'); ?>">
+                                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                                    <span class="mptbm_btn_label"><?php esc_html_e('Classic Editor', 'ecab-taxi-booking-manager'); ?></span>
+                                </a>
+
+                                <?php submit_button($post_id ? __('Update', 'ecab-taxi-booking-manager') : __('Publish', 'ecab-taxi-booking-manager'), 'primary', '', false); ?>
                             </div>
 
                         </div>
@@ -639,6 +673,8 @@ if (!class_exists('MPTBM_Rent_Custom_Editor')) {
 
                 self::taxi_feature_add_remove( $post_id, $all_features );
 
+                self::taxi_show_reviews_toggle( $post_id );
+
                 ?>
 
             </div>
@@ -866,11 +902,212 @@ if (!class_exists('MPTBM_Rent_Custom_Editor')) {
 
             </div>
         <?php }
+        public static function taxi_show_reviews_toggle( $post_id ){
+            $show_reviews = MP_Global_Function::get_post_info($post_id, 'mptbm_show_reviews', 'no');
+            $reviews_active = $show_reviews == 'yes' ? 'On' : 'Off';
+            $reviews_checked = $show_reviews == 'yes' ? 'checked' : '';
+            ?>
+            <div class="mptbm_rent_editor_wrapper">
+                <div class="mptbm_taxi_feature_header mptbm_rent_editor_header">
+                    <div class="mptbm_taxi_feature_title_area">
+                        <h2 class="mptbm_rent_editor_title"><?php esc_html_e( 'Customer Reviews', 'ecab-taxi-booking-manager' ); ?></h2>
+                        <p class="mptbm_rent_editor_subtitle"><?php esc_html_e( 'Show the star rating in search results and let customers leave a review for this vehicle after a completed trip.', 'ecab-taxi-booking-manager' ); ?></p>
+                    </div>
+                    <div class="mptbm_taxi_feature_switch">
+                        <span class="mptbm_taxi_feature_switch_text"><?php echo esc_html( $reviews_active );?></span>
+                        <label class="mptbm_taxi_feature_toggle">
+                            <input type="checkbox" id="mptbm_show_reviews" name="mptbm_show_reviews" <?php echo esc_attr( $reviews_checked );?>>
+                            <span class="mptbm_taxi_feature_slider"></span>
+                        </label>
+                    </div>
+                </div>
+                <?php self::render_reviews_admin_list( $post_id ); ?>
+            </div>
+        <?php }
+
+        // Reviews are only manageable here while the toggle above is on, and are not rendered
+        // up front - admin clicks a button to load them (20 at a time, with Load More), so a
+        // vehicle with hundreds of reviews doesn't bloat the edit page.
+        public static function render_reviews_admin_list( $post_id ){
+            if ( ! class_exists( 'MPTBM_Reviews' ) || ! MPTBM_Reviews::reviews_enabled( $post_id ) ) {
+                return;
+            }
+            $total = MPTBM_Reviews::get_average_rating( $post_id )['count'];
+            if ( $total === 0 ) {
+                return;
+            }
+            ?>
+            <div class="mptbm_taxi_advanced_card mptbm_reviews_manage_body" id="mptbm_admin_reviews_list" style="margin-top: 15px; border-top: 1px solid #e1e5e9; padding-top: 15px;">
+                <label class="mptbm_rent_label"><?php esc_html_e( 'Manage Reviews', 'ecab-taxi-booking-manager' ); ?></label>
+                <p>
+                    <button type="button" class="button" id="mptbm_view_reviews_btn"
+                        data-post-id="<?php echo esc_attr( $post_id ); ?>"
+                        data-nonce="<?php echo esc_attr( wp_create_nonce( 'mptbm_load_reviews_' . $post_id ) ); ?>">
+                        <?php
+                        printf(
+                            /* translators: %d: number of reviews */
+                            esc_html__( 'View Reviews (%d)', 'ecab-taxi-booking-manager' ),
+                            (int) $total
+                        );
+                        ?>
+                    </button>
+                </p>
+                <div id="mptbm_reviews_list_body"></div>
+                <p>
+                    <button type="button" class="button" id="mptbm_load_more_reviews_btn" style="display:none;" data-offset="0">
+                        <?php esc_html_e( 'Load More', 'ecab-taxi-booking-manager' ); ?>
+                    </button>
+                </p>
+            </div>
+            <script>
+            jQuery(function($){
+                function mptbmReviewRowHtml(review) {
+                    var stars = '';
+                    for (var i = 1; i <= 5; i++) { stars += (i <= review.rating) ? '★' : '☆'; }
+                    return '<div class="mptbm_admin_review_row" data-comment-id="' + review.id + '" style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;padding:10px 0;border-bottom:1px solid #eee;">' +
+                        '<div>' +
+                            '<div style="color:#f5a623;">' + stars + '</div>' +
+                            '<strong>' + review.author + '</strong>' +
+                            '<span style="color:#999;font-size:12px;"> — ' + review.date + '</span>' +
+                            '<p style="margin:4px 0 0;">' + review.content + '</p>' +
+                        '</div>' +
+                        '<button type="button" class="button mptbm_delete_review_btn" data-comment-id="' + review.id + '" data-nonce="' + review.delete_nonce + '">' +
+                            <?php echo wp_json_encode( __( 'Delete', 'ecab-taxi-booking-manager' ) ); ?> +
+                        '</button>' +
+                    '</div>';
+                }
+
+                function mptbmLoadReviews(offset) {
+                    var $viewBtn = $('#mptbm_view_reviews_btn');
+                    var $loadMoreBtn = $('#mptbm_load_more_reviews_btn').prop('disabled', true);
+                    $.post(ajaxurl, {
+                        action: 'mptbm_admin_load_reviews',
+                        post_id: $viewBtn.data('post-id'),
+                        offset: offset,
+                        nonce: $viewBtn.data('nonce')
+                    }, function(response){
+                        $loadMoreBtn.prop('disabled', false);
+                        if (!response.success) {
+                            alert((response.data && response.data.message) ? response.data.message : 'Error');
+                            return;
+                        }
+                        var html = '';
+                        $.each(response.data.reviews, function(i, review){ html += mptbmReviewRowHtml(review); });
+                        $('#mptbm_reviews_list_body').append(html);
+                        var newOffset = offset + response.data.reviews.length;
+                        $loadMoreBtn.data('offset', newOffset).toggle(response.data.has_more);
+                    }).fail(function(){
+                        $loadMoreBtn.prop('disabled', false);
+                        alert('Error, please try again.');
+                    });
+                }
+
+                $('#mptbm_view_reviews_btn').on('click', function(){
+                    $(this).prop('disabled', true).hide();
+                    mptbmLoadReviews(0);
+                });
+
+                $('#mptbm_load_more_reviews_btn').on('click', function(){
+                    mptbmLoadReviews($(this).data('offset') || 0);
+                });
+
+                $(document).on('click', '.mptbm_delete_review_btn', function(){
+                    if (!confirm(<?php echo wp_json_encode( __( 'Delete this review? This cannot be undone.', 'ecab-taxi-booking-manager' ) ); ?>)) {
+                        return;
+                    }
+                    var $btn = $(this).prop('disabled', true);
+                    var $row = $btn.closest('.mptbm_admin_review_row');
+                    $.post(ajaxurl, {
+                        action: 'mptbm_admin_delete_review',
+                        comment_id: $btn.data('comment-id'),
+                        post_id: <?php echo (int) $post_id; ?>,
+                        nonce: $btn.data('nonce')
+                    }, function(response){
+                        if (response.success) {
+                            $row.fadeOut(200, function(){ $(this).remove(); });
+                        } else {
+                            $btn.prop('disabled', false);
+                            alert((response.data && response.data.message) ? response.data.message : 'Error');
+                        }
+                    }).fail(function(){
+                        $btn.prop('disabled', false);
+                        alert('Error, please try again.');
+                    });
+                });
+            });
+            </script>
+        <?php }
+        public static function taxi_availability_status( $post_id ){
+            $status = MP_Global_Function::get_post_info($post_id, 'mptbm_availability_status', 'available');
+            $is_unavailable = $status === 'unavailable';
+            $status_text = $is_unavailable ? esc_html__('Unavailable', 'ecab-taxi-booking-manager') : esc_html__('Available', 'ecab-taxi-booking-manager');
+            $checked = $is_unavailable ? 'checked' : '';
+            $reason = MP_Global_Function::get_post_info($post_id, 'mptbm_availability_reason', 'maintenance');
+            $reason_note = MP_Global_Function::get_post_info($post_id, 'mptbm_availability_reason_note', '');
+            $reasons = MPTBM_Function::get_availability_reason_labels();
+            ?>
+            <div class="mptbm_rent_editor_wrapper" id="mptbm_vehicle_availability_section">
+                <input type="hidden" name="mptbm_availability_status_field_present" value="1">
+                <div class="mptbm_taxi_feature_header mptbm_rent_editor_header">
+                    <div class="mptbm_taxi_feature_title_area">
+                        <h2 class="mptbm_rent_editor_title"><?php esc_html_e( 'Vehicle Availability', 'ecab-taxi-booking-manager' ); ?></h2>
+                        <p class="mptbm_rent_editor_subtitle"><?php esc_html_e( 'Manually mark this vehicle unavailable (e.g. it\'s out on a long trip). While unavailable it will not appear in search results at all, until you switch it back. Only used while Inventory Management\'s Availability Check Mode is set to Manual.', 'ecab-taxi-booking-manager' ); ?></p>
+                    </div>
+                    <div class="mptbm_taxi_feature_switch">
+                        <span class="mptbm_taxi_feature_switch_text mptbm_availability_status_text" data-available-text="<?php esc_attr_e('Available', 'ecab-taxi-booking-manager'); ?>" data-unavailable-text="<?php esc_attr_e('Unavailable', 'ecab-taxi-booking-manager'); ?>"><?php echo esc_html( $status_text ); ?></span>
+                        <label class="mptbm_taxi_feature_toggle">
+                            <input type="checkbox" id="mptbm_availability_status" name="mptbm_availability_status" <?php echo esc_attr( $checked ); ?>>
+                            <span class="mptbm_taxi_feature_slider"></span>
+                        </label>
+                    </div>
+                </div>
+
+                <div class="mptbm_taxi_advanced_card" id="mptbm_availability_reason_row" style="margin-bottom: 0; display: <?php echo $is_unavailable ? 'block' : 'none'; ?>;">
+                    <div class="mptbm_taxi_advanced_card_header">
+                        <div class="mptbm_taxi_advanced_title_block">
+                            <label class="mptbm_rent_label"><?php esc_html_e( 'Reason', 'ecab-taxi-booking-manager' ); ?></label>
+                            <span class="desc"><?php esc_html_e( 'Why is this vehicle unavailable? Shown to admins in the vehicle list.', 'ecab-taxi-booking-manager' ); ?></span>
+                        </div>
+                        <select id="mptbm_availability_reason" name="mptbm_availability_reason" class="formControl mptbm_taxi_inventory_styled_input">
+                            <?php foreach ( $reasons as $value => $label ) : ?>
+                                <option value="<?php echo esc_attr( $value ); ?>" <?php selected( $reason, $value ); ?>><?php echo esc_html( $label ); ?></option>
+                            <?php endforeach; ?>
+                        </select>
+                    </div>
+                    <div class="mptbm_taxi_advanced_card_header" id="mptbm_availability_reason_note_row" style="display: <?php echo $reason === 'other' ? 'flex' : 'none'; ?>;">
+                        <div class="mptbm_taxi_advanced_title_block">
+                            <label class="mptbm_rent_label"><?php esc_html_e( 'Note', 'ecab-taxi-booking-manager' ); ?></label>
+                            <span class="desc"><?php esc_html_e( 'Describe the reason.', 'ecab-taxi-booking-manager' ); ?></span>
+                        </div>
+                        <input type="text" id="mptbm_availability_reason_note" name="mptbm_availability_reason_note" class="mptbm_taxi_inventory_styled_input" value="<?php echo esc_attr( $reason_note ); ?>" placeholder="<?php esc_attr_e('e.g. Waiting on insurance claim', 'ecab-taxi-booking-manager'); ?>">
+                    </div>
+                </div>
+            </div>
+            <style>
+                .mptbm_taxi_feature_disabled {
+                    opacity: 0.5;
+                    pointer-events: none;
+                }
+            </style>
+            <script>
+            jQuery(function($) {
+                $('#mptbm_availability_status').on('change', function() {
+                    var $text = $(this).closest('.mptbm_taxi_feature_header').find('.mptbm_availability_status_text');
+                    $text.text(this.checked ? $text.data('unavailable-text') : $text.data('available-text'));
+                    $('#mptbm_availability_reason_row').toggle(this.checked);
+                });
+                $('#mptbm_availability_reason').on('change', function() {
+                    $('#mptbm_availability_reason_note_row').toggle($(this).val() === 'other');
+                });
+            });
+            </script>
+        <?php }
         public static function taxi_inventory_manages( $post_id, $all_features ){
             $display_features = MP_Global_Function::get_post_info($post_id, 'mptbm_enable_inventory', 'no');
             $features_active = $display_features == 'no' ? 'Off' : 'On';
             $display = $display_features == 'no' ? 'none' : 'block';
             $features_checked = $display_features == 'no' ? '' : 'checked';
+            $availability_check_mode = MP_Global_Function::get_post_info($post_id, 'mptbm_availability_check_mode', 'automatic');
             ?>
             <div class="mptbm_rent_editor_wrapper">
                 <div class="mptbm_taxi_feature_header mptbm_rent_editor_header">
@@ -893,6 +1130,19 @@ if (!class_exists('MPTBM_Rent_Custom_Editor')) {
                         <div class="mptbm_taxi_advanced_card" style="margin-bottom: 0;">
                             <div class="mptbm_taxi_advanced_card_header">
                                 <div class="mptbm_taxi_advanced_title_block">
+                                    <label class="mptbm_rent_label"><?php esc_html_e( 'Availability Check Mode', 'ecab-taxi-booking-manager' ); ?></label>
+                                    <span class="desc"><?php esc_html_e( 'Quantity/interval availability below always applies to search results. Manual also adds the Vehicle Availability toggle below on top of that. Automatic ignores the toggle and relies on quantity/interval only.', 'ecab-taxi-booking-manager' ); ?></span>
+                                </div>
+                                <select id="mptbm_availability_check_mode" name="mptbm_availability_check_mode" class="formControl mptbm_taxi_inventory_styled_input">
+                                    <option value="automatic" <?php selected( $availability_check_mode, 'automatic' ); ?>><?php esc_html_e( 'Automatic (booking interval)', 'ecab-taxi-booking-manager' ); ?></option>
+                                    <option value="manual" <?php selected( $availability_check_mode, 'manual' ); ?>><?php esc_html_e( 'Manual', 'ecab-taxi-booking-manager' ); ?></option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <div class="mptbm_taxi_advanced_card" id="mptbm_vehicle_quantity_card" style="margin-bottom: 0;">
+                            <div class="mptbm_taxi_advanced_card_header">
+                                <div class="mptbm_taxi_advanced_title_block">
                                     <label class="mptbm_rent_label"><?php esc_html_e( 'Vehicle Quantity', 'ecab-taxi-booking-manager' ); ?></label>
                                     <span class="desc"><?php esc_html_e( 'Total number of this vehicle type available for simultaneous bookings.', 'ecab-taxi-booking-manager' ); ?></span>
                                 </div>
@@ -907,7 +1157,7 @@ if (!class_exists('MPTBM_Rent_Custom_Editor')) {
                             </div>
                         </div>
 
-                        <div class="mptbm_taxi_advanced_card" style="margin-bottom: 0;">
+                        <div class="mptbm_taxi_advanced_card" id="mptbm_booking_interval_card" style="margin-bottom: 0;">
                             <div class="mptbm_taxi_advanced_card_header">
                                 <div class="mptbm_taxi_advanced_title_block">
                                     <label class="mptbm_rent_label"><?php esc_html_e( 'Booking Interval Time (minutes)', 'ecab-taxi-booking-manager' ); ?></label>
@@ -923,11 +1173,24 @@ if (!class_exists('MPTBM_Rent_Custom_Editor')) {
                                 >
                             </div>
                         </div>
+
+                        <?php self::taxi_availability_status( $post_id ); ?>
                     </div>
                 </div>
 
 
             </div>
+            <script>
+            jQuery(function($) {
+                function mptbmToggleAvailabilityCheckMode() {
+                    var isManual = $('#mptbm_availability_check_mode').val() === 'manual';
+                    $('#mptbm_vehicle_availability_section').toggleClass('mptbm_taxi_feature_disabled', !isManual);
+                    $('#mptbm_booking_interval_card').toggleClass('mptbm_taxi_feature_disabled', isManual);
+                }
+                $(document).on('change', '#mptbm_availability_check_mode', mptbmToggleAvailabilityCheckMode);
+                mptbmToggleAvailabilityCheckMode();
+            });
+            </script>
         <?php }
         public static function date_configuration_set( $post_id ){ ?>
             <div class="mptbm_taxi_container " data-step="3" style="display: none">
@@ -998,6 +1261,9 @@ if (!class_exists('MPTBM_Rent_Custom_Editor')) {
                     </div>
                 </div>
             </div>
+            <script type="text/html" id="mptbm_taxi_ex_service_custom_template">
+                <?php self::extra_service_item( $post_id, $post_id ); ?>
+            </script>
         <?php }
 
         public static function extra_service_item( $post_id, $service_id ) {
@@ -1078,6 +1344,8 @@ if (!class_exists('MPTBM_Rent_Custom_Editor')) {
 
             $waiting_time_check = MPTBM_Function::get_general_settings('taxi_waiting_time', 'enable');
             $waiting_price = MP_Global_Function::get_post_info($post_id, 'mptbm_waiting_price');
+            $stop_price = MP_Global_Function::get_post_info($post_id, 'mptbm_stop_price');
+            $extra_stop_enabled = MP_Global_Function::get_settings('mptbm_general_settings', 'mptbm_extra_stop_between_pickup_dropoff');
 
             $display            = MP_Global_Function::get_post_info( $post_id, 'mptbm_display_taxi_base_fare_pricing', 'off' );
             $active             = $display == 'off' ? 'none' : 'block';
@@ -1129,6 +1397,13 @@ if (!class_exists('MPTBM_Rent_Custom_Editor')) {
                                 <label><?php esc_html_e( 'Waiting Time Price / Hour', 'ecab-taxi-booking-manager' ); ?></label>
                                 <p class="mptbm_taxi_help"><?php esc_html_e( 'Hourly rate charged when the driver is waiting for the passenger.', 'ecab-taxi-booking-manager' ); ?></p>
                                 <input name="mptbm_waiting_price" type="text" value="<?php echo esc_attr( $waiting_price );?>" placeholder="<?php esc_html_e( 'e.g. 10', 'ecab-taxi-booking-manager' ); ?>">
+                            </div>
+                        <?php }?>
+                        <?php if ($extra_stop_enabled == 'yes') { ?>
+                            <div class="mptbm_taxi_field">
+                                <label><?php esc_html_e( 'Price Per Extra Stop', 'ecab-taxi-booking-manager' ); ?></label>
+                                <p class="mptbm_taxi_help"><?php esc_html_e( 'Flat charge added for each extra stop the customer adds between pickup and drop-off.', 'ecab-taxi-booking-manager' ); ?></p>
+                                <input name="mptbm_stop_price" type="text" value="<?php echo esc_attr( $stop_price );?>" placeholder="<?php esc_html_e( 'e.g. 5', 'ecab-taxi-booking-manager' ); ?>">
                             </div>
                         <?php }?>
                     </div>
@@ -1311,7 +1586,7 @@ if (!class_exists('MPTBM_Rent_Custom_Editor')) {
 
                             <div class="mptbm_taxi_pricing_field"
                                  id="mptbm_distance_price"
-                                 style="display: <?php echo ($price_based === 'inclusive' || $price_based === 'distance' || $price_based === 'distance_duration' || $price_based === 'fixed_distance' ) ? 'block' : 'none'; ?>">
+                                 style="display: <?php echo ( $price_based === 'inclusive' || $price_based === 'distance' || $price_based === 'distance_duration' || $price_based === 'fixed_distance' ) ? 'block' : 'none'; ?>">
                                 <label><?php esc_html_e( 'Price per KM', 'ecab-taxi-booking-manager' ); ?></label>
                                 <input name="mptbm_km_price" value="<?php echo esc_attr( $distance_price );?>" type="text" placeholder="1.00">
 
@@ -1355,9 +1630,19 @@ if (!class_exists('MPTBM_Rent_Custom_Editor')) {
                                 </div>
                             </div>
 
+                            <?php
+                            $manual_pricing_set = 'none';
+                            if( $price_based === 'inclusive' && $inclusive_manual_locations === 'on' ){
+                                $manual_pricing_set = 'block';
+                            }
+
+                            if( $price_based === 'manual' ){
+                                $manual_pricing_set = 'block';
+                            }
+                            ?>
                             <div class="mptbm_taxi_pricing_field1"
                                  id="mptbm_manual_routes"
-                                 style="display: <?php echo ( $inclusive_manual_locations === 'on' ) ? 'block' : 'none'; ?>">
+                                 style="display: <?php echo esc_attr( $manual_pricing_set ) ; ?>">
                                 <div class="mptbm_taxi_pricing_row_head">
                                     <span class="mptbm_taxi_pricing_label"><i class="fas fa-route"></i> <?php esc_html_e( 'Manual Routes', 'ecab-taxi-booking-manager' ); ?></span>
                                 </div>
@@ -3110,18 +3395,16 @@ if (!class_exists('MPTBM_Rent_Custom_Editor')) {
             }
         }
 
-        // 3. Save / Update post
-        public function save_post() {
-
-            if (
-                !isset($_POST['_wpnonce']) ||
-                !wp_verify_nonce($_POST['_wpnonce'], 'save_mptbm_rent_nonce')
-            ) {
-                wp_die('Security check failed');
-            }
-
-            $post_id = intval($_POST['post_id']);
-            $title   =  isset($_POST['post_title'] ) ? sanitize_text_field($_POST['post_title']) : 'TEst';
+        /**
+         * Core save routine shared by the classic (redirect) and AJAX handlers.
+         * Runs wp_update_post so every registered save_post hook (general,
+         * price, date, base-price, tax, extra services...) persists its own
+         * $_POST fields, then stores the manual route table. Returns the post
+         * ID on success or a WP_Error/0 on failure.
+         */
+        private function persist_rent() {
+            $post_id = isset($_POST['post_id']) ? intval($_POST['post_id']) : 0;
+            $title   = isset($_POST['post_title']) ? sanitize_text_field(wp_unslash($_POST['post_title'])) : '';
 
             $data = [
                 'post_title'  => $title,
@@ -3131,9 +3414,13 @@ if (!class_exists('MPTBM_Rent_Custom_Editor')) {
 
             if ($post_id) {
                 $data['ID'] = $post_id;
-                $post_id = wp_update_post($data);
+                $post_id = wp_update_post($data, true);
             } else {
-                $post_id = wp_insert_post($data);
+                $post_id = wp_insert_post($data, true);
+            }
+
+            if (is_wp_error($post_id) || !$post_id) {
+                return $post_id;
             }
 
             // Save manual routes
@@ -3155,8 +3442,76 @@ if (!class_exists('MPTBM_Rent_Custom_Editor')) {
             }
             update_post_meta($post_id, 'mptbm_terms_price_info', $terms_price_infos);
 
+            return $post_id;
+        }
+
+        // 3. Save / Update post (classic full-page submit fallback — no JS).
+        public function save_post() {
+
+            if (
+                !isset($_POST['_wpnonce']) ||
+                !wp_verify_nonce(sanitize_text_field(wp_unslash($_POST['_wpnonce'])), 'save_mptbm_rent_nonce')
+            ) {
+                wp_die('Security check failed');
+            }
+            if (!current_user_can('manage_options')) {
+                wp_die('You are not allowed to do this.');
+            }
+
+            $post_id = $this->persist_rent();
+            if (is_wp_error($post_id) || !$post_id) {
+                wp_die('Could not save transportation. Please go back and try again.');
+            }
+
             wp_redirect(admin_url('admin.php?page=mptbm-rent-edit&post_id=' . $post_id . '&updated=1'));
             exit;
+        }
+
+        /**
+         * AJAX save — used by the editor for instant, reload-free updates.
+         * Returns a translated success/error JSON payload the frontend turns
+         * into a toast. Validates the one hard-required field (Rent Title)
+         * server-side as a safety net behind the client-side check.
+         */
+        public function ajax_save_rent() {
+
+            if (
+                !isset($_POST['_wpnonce']) ||
+                !wp_verify_nonce(sanitize_text_field(wp_unslash($_POST['_wpnonce'])), 'save_mptbm_rent_nonce')
+            ) {
+                wp_send_json_error(['message' => __('Security check failed. Please refresh the page and try again.', 'ecab-taxi-booking-manager')]);
+            }
+            if (!current_user_can('manage_options')) {
+                wp_send_json_error(['message' => __('You are not allowed to do this.', 'ecab-taxi-booking-manager')]);
+            }
+
+            $title = isset($_POST['post_title']) ? trim(sanitize_text_field(wp_unslash($_POST['post_title']))) : '';
+            if ($title === '') {
+                wp_send_json_error([
+                    'message' => __('Rent Title is required.', 'ecab-taxi-booking-manager'),
+                    'field'   => 'post_title',
+                    'step'    => 1,
+                ]);
+            }
+
+            if (function_exists('wp_raise_memory_limit')) {
+                wp_raise_memory_limit('admin');
+            }
+
+            $post_id = $this->persist_rent();
+            if (is_wp_error($post_id) || !$post_id) {
+                $message = is_wp_error($post_id) ? $post_id->get_error_message() : __('Could not save. Please try again.', 'ecab-taxi-booking-manager');
+                wp_send_json_error(['message' => $message]);
+            }
+
+            wp_send_json_success([
+                'message'      => __('Transportation saved successfully.', 'ecab-taxi-booking-manager'),
+                'post_id'      => (int) $post_id,
+                'title'        => get_the_title($post_id),
+                'status'       => get_post_status($post_id),
+                'status_slug'  => 'publish',
+                'status_label' => __('Published', 'ecab-taxi-booking-manager'),
+            ]);
         }
 
         // 4. Redirect default WP editor → custom page

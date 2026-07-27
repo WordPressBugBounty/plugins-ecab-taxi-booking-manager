@@ -188,7 +188,12 @@
 				<?php
 			}
 			public function save_general_settings($post_id) {
-				if (!isset($_POST['mptbm_transportation_type_nonce']) || !wp_verify_nonce(sanitize_text_field( wp_unslash ($_POST['mptbm_transportation_type_nonce'])), 'mptbm_transportation_type_nonce') && defined('DOING_AUTOSAVE') && DOING_AUTOSAVE && !current_user_can('edit_post', $post_id)) {
+				if (get_post_type($post_id) !== MPTBM_Function::get_cpt()
+					|| (defined('DOING_AUTOSAVE') && DOING_AUTOSAVE)
+					|| wp_is_post_revision($post_id)
+					|| !current_user_can('edit_post', $post_id)
+					|| !isset($_POST['mptbm_transportation_type_nonce'])
+					|| !wp_verify_nonce(sanitize_text_field(wp_unslash($_POST['mptbm_transportation_type_nonce'])), 'mptbm_transportation_type_nonce')) {
 					return;
 				}
 				if (get_post_type($post_id) == MPTBM_Function::get_cpt()) {
@@ -207,7 +212,12 @@
 					// Save inventory settings
 					$enable_inventory = isset($_POST['mptbm_enable_inventory']) && sanitize_text_field($_POST['mptbm_enable_inventory']) ? 'yes' : 'no';
 					update_post_meta($post_id, 'mptbm_enable_inventory', $enable_inventory);
-					
+
+					// Availability Check Mode: 'manual' uses the Vehicle Availability toggle,
+					// 'automatic' uses the Booking Interval Time below instead - only one applies at a time.
+					$availability_check_mode = isset($_POST['mptbm_availability_check_mode']) && sanitize_text_field($_POST['mptbm_availability_check_mode']) === 'automatic' ? 'automatic' : 'manual';
+					update_post_meta($post_id, 'mptbm_availability_check_mode', $availability_check_mode);
+
 					// Only save quantity and interval time if inventory is enabled
 					if ($enable_inventory == 'yes') {
 						$quantity = isset($_POST['mptbm_quantity']) ? absint($_POST['mptbm_quantity']) : 1;
@@ -222,6 +232,10 @@
 					
 					$display_features = isset($_POST['display_mptbm_features']) && sanitize_text_field($_POST['display_mptbm_features'])? 'on' : 'off';
 					update_post_meta($post_id, 'display_mptbm_features', $display_features);
+
+					// Customer Reviews: default off - only show the rating/review UI for this vehicle when explicitly enabled.
+					$show_reviews = isset($_POST['mptbm_show_reviews']) && sanitize_text_field($_POST['mptbm_show_reviews']) ? 'yes' : 'no';
+					update_post_meta($post_id, 'mptbm_show_reviews', $show_reviews);
 					$features_text = isset($_POST['mptbm_features_text']) ? array_map('sanitize_text_field',$_POST['mptbm_features_text']) : [];
 					if (sizeof($features_text) > 0) {
 						$features_icon = isset($_POST['mptbm_features_icon_image']) ? array_map('sanitize_text_field',$_POST['mptbm_features_icon_image']) : [];
