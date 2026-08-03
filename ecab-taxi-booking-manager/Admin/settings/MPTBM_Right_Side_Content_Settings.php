@@ -10,6 +10,7 @@ if ( ! class_exists('MPTBM_Right_Side_Content_Settings') ) {
     class MPTBM_Right_Side_Content_Settings{
         public function __construct(){
             add_action('mptbm_right_side_section', [ $this, 'mptbm_right_side_section'], 10, 1 );
+            add_action('add_meta_boxes', [ $this, 'register_side_metabox' ] );
 
             add_action('wp_ajax_mptbm_taxi_save_category', [ $this, 'mptbm_taxi_save_category' ] );
             add_action('wp_ajax_mptbm_taxi_save_post_category', [ $this, 'mptbm_taxi_save_post_category' ]);
@@ -38,6 +39,33 @@ if ( ! class_exists('MPTBM_Right_Side_Content_Settings') ) {
 
         }
 
+        // Native post-new.php/post.php screen: the featured-image picker
+        // above is redundant with WordPress's own Featured Image box now
+        // that mptbm_rent supports 'thumbnail' natively, so this side
+        // metabox only carries the Pro upsell / quick tips / category-tag
+        // manager — not the feature image.
+        public function register_side_metabox() {
+            add_meta_box(
+                'mptbm_rent_right_side_panel',
+                __('Transportation Details', 'ecab-taxi-booking-manager'),
+                [ $this, 'render_side_metabox' ],
+                MPTBM_Function::get_cpt(),
+                'side',
+                'default'
+            );
+        }
+
+        public function render_side_metabox( $post ) {
+            // Lets other classes (MPTBM_Payment_Settings) inject a card into this
+            // same metabox without this class needing to know about them — the
+            // "Payment Method" card renders first so mptbm-shell.js can relocate
+            // it to the top of the persistent sidebar, above the Featured Image.
+            do_action( 'mptbm_rent_sidebar_top', $post->ID );
+
+            self::mptbm_right_pro_features_card();
+            self::mptbm_right_quick_tipcs( $post->ID );
+        }
+
         public static function category_tag_add( $post_id ){
             $saved_category = get_post_meta($post_id, 'mptbm_taxi_category_id', true);
 
@@ -61,10 +89,6 @@ if ( ! class_exists('MPTBM_Right_Side_Content_Settings') ) {
                             <label class="mptbm_taxi_category_label"><?php esc_html_e( 'Categories', 'ecab-taxi-booking-manager' ); ?></label>
                             <span class="mptbm_taxi_category_subtext"><?php esc_html_e( 'Select vehicle category', 'ecab-taxi-booking-manager' ); ?></span>
                         </div>
-                        <button type="button" class="mptbm_taxi_all_category_label">
-                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
-                            <?php esc_html_e( 'All Categories', 'ecab-taxi-booking-manager' ); ?>
-                        </button>
                     </div>
 
                     <div class="mptbm_taxi_category_flex_group" id="mptbm_taxi_category_flex_group">
@@ -89,6 +113,13 @@ if ( ! class_exists('MPTBM_Right_Side_Content_Settings') ) {
                             </select>
                             <svg class="mptbm_taxi_select_chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>
                         </div>
+
+                        <button type="button"
+                                class="mptbm_taxi_all_category_label"
+                                title="<?php esc_attr_e( 'View all categories', 'ecab-taxi-booking-manager' ); ?>"
+                                aria-label="<?php esc_attr_e( 'View all categories', 'ecab-taxi-booking-manager' ); ?>">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+                        </button>
 
                         <button type="button"
                                 id="mptbm_taxi_category_open_popup"
@@ -181,7 +212,7 @@ if ( ! class_exists('MPTBM_Right_Side_Content_Settings') ) {
                     <li><?php esc_html_e( 'Priority Email And PDF Support', 'ecab-taxi-booking-manager' ); ?></li>
                 </ul>
 
-                <a href="https://mage-people.com/" class="mptbm_pro_card_btn" target="_blank" rel="noopener noreferrer">
+                <a href="https://mage-people.com/product/wordpress-taxi-cab-booking-plugin-for-woocommerce/" class="mptbm_pro_card_btn" target="_blank" rel="noopener noreferrer">
                     <?php esc_html_e( 'Upgrade to Pro', 'ecab-taxi-booking-manager' ); ?>
                 </a>
 
@@ -530,7 +561,7 @@ if ( ! class_exists('MPTBM_Right_Side_Content_Settings') ) {
                                id="mptbm_taxi_category_new_name"
                                class="mptbm_taxi_category_input"
                                value=" <?php echo esc_attr( $name ); ?>"
-                               placeholder="<?php esc_html_e( 'e.g., Electric Van', 'ecab-taxi-booking-manager' ); ?>">
+                               placeholder="<?php esc_html_e( 'Electric Van', 'ecab-taxi-booking-manager' ); ?>">
                     </div>
 
                     <div class="mptbm_taxi_category_form_group">

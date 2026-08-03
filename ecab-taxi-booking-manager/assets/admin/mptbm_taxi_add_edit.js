@@ -1,259 +1,9 @@
 (function ($) {
     $(document).ready(function() {
 
-        function adjustScrollMargin() {
-            var $header = $('.mptbm_fixed_header');
-            var $content = $('.mptbm_scroll_content');
-            if ($header.length && $content.length) {
-                var headerHeight = $header.outerHeight();
-                $content.css('margin-top', headerHeight + 'px');
-            }
-        }
-
-        adjustScrollMargin();
-        $(window).on('resize', adjustScrollMargin);
-
-        let currentStep = 1;
-        let totalSteps = $('.mptbm_taxi_step').length;
-
         // Persists selected pill IDs per area type so switching back restores them
         let selectionCache = {};
         let currentAreaType = $('input[name="mptbm_operation_area_type"]:checked').val() || '';
-        function updateStep(step) {
-
-            if (step < 1 || step > totalSteps) return;
-
-            currentStep = step;
-
-            $('.mptbm_taxi_step').each(function () {
-
-                let itemStep = $(this).data('step');
-
-                $(this).removeClass('mptbm_taxi_active completed');
-
-                if (itemStep < step) {
-                    $(this).addClass('completed');
-                }
-                else if (itemStep == step) {
-                    $(this).addClass('mptbm_taxi_active');
-                }
-            });
-
-            $('.mptbm_taxi_content_container > [data-step]').hide();
-            $('.mptbm_taxi_content_container > [data-step="' + step + '"]').show();
-
-            $('.mptbm_taxi_step_counter').text('Step ' + step + ' of ' + totalSteps);
-
-            $('.mptbm_taxi_btn_prev').prop('disabled', step === 1);
-
-            if (step === totalSteps) {
-
-                $('.mptbm_taxi_btn_next')
-                    .text('Submit')
-                    .attr('type', 'submit')
-                    .removeClass('button-next')
-                    .addClass('button-submit');
-
-            } else {
-
-                $('.mptbm_taxi_btn_next')
-                    .text('Next →')
-                    .attr('type', 'button')
-                    .removeClass('button-submit')
-                    .addClass('button-next');
-            }
-        }
-
-        $('.mptbm_taxi_step').on('click', function () {
-            updateStep($(this).data('step'));
-        });
-        $('.mptbm_taxi_btn_next').on('click', function (e) {
-
-            if (currentStep < totalSteps) {
-                e.preventDefault();
-                updateStep(currentStep + 1);
-            } else {
-                // last step → submit form natively to admin-post.php
-                // prevent default native submit once and trigger programmatically to avoid double-submit
-                e.preventDefault();
-                $('.mptbm_rent_form').submit();
-            }
-        });
-
-        $('.mptbm_taxi_btn_prev').on('click', function (e) {
-            e.preventDefault();
-            updateStep(currentStep - 1);
-        });
-
-        updateStep(1);
-
-        /* ===============================================================
-           Instant AJAX save + required-field validation.
-           Intercepts the form submit (header "Update" and the last-step
-           footer button both trigger it), validates required fields,
-           jumps to the first missing one, or saves without a reload and
-           shows a success / error toast.
-           =============================================================== */
-        (function () {
-            var $form = $('.mptbm_rent_form');
-            if (!$form.length) { return; }
-
-            var cfg  = window.mptbm_editor_l10n || {};
-            var i18n = cfg.i18n || {};
-
-            // ---- Toast ----
-            function dismissToast($t) {
-                $t.removeClass('is-show');
-                setTimeout(function () { $t.remove(); }, 300);
-            }
-            function showToast(type, message) {
-                $('.mptbm_toast').each(function () { dismissToast($(this)); });
-                var isOk = type === 'success';
-                var icon = isOk
-                    ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>'
-                    : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>';
-                var $t = $('<div class="mptbm_toast ' + (isOk ? 'mptbm_toast_success' : 'mptbm_toast_error') + '" role="status" aria-live="polite"></div>');
-                $t.html('<span class="mptbm_toast_icon">' + icon + '</span><span class="mptbm_toast_msg"></span>');
-                $t.find('.mptbm_toast_msg').text(message || '');
-                $('body').append($t);
-                $t[0].offsetHeight; // reflow so the transition plays
-                $t.addClass('is-show');
-                var timer = setTimeout(function () { dismissToast($t); }, 4200);
-                $t.on('click', function () { clearTimeout(timer); dismissToast($t); });
-            }
-
-            // ---- Required-field helpers ----
-            function fieldLabel(el) {
-                var $el = $(el), id = $el.attr('id'), txt = '';
-                if (id) { txt = $('label[for="' + id + '"]').first().clone().children().remove().end().text(); }
-                if (!txt) { txt = $el.closest('.mptbm_rent_field_group, .mptbm_taxi_field, .mptbm_taxi_form_group, .formGroup').find('label').first().clone().children().remove().end().text(); }
-                if (!txt) { txt = $el.attr('placeholder') || $el.attr('name') || ''; }
-                return $.trim(txt).replace(/\*+\s*$/, '').trim();
-            }
-            function isEmptyField(el) {
-                var $el = $(el), type = (el.type || '').toLowerCase();
-                if (type === 'checkbox' || type === 'radio') {
-                    var name = $el.attr('name');
-                    return name ? $form.find('input[name="' + name + '"]:checked').length === 0 : !el.checked;
-                }
-                return $.trim($el.val() || '') === '';
-            }
-            // Skip hidden inputs, disabled/readonly controls, self-hidden fields,
-            // and required fields inside a collapsed sub-section (unreachable) —
-            // only the wizard-step wrapper being hidden should not disqualify.
-            function isValidatable(el) {
-                var $el = $(el), type = (el.type || '').toLowerCase();
-                if (type === 'hidden' || el.disabled || el.readOnly) { return false; }
-                if ($el.css('display') === 'none') { return false; }
-                var $step = $el.closest('[data-step]');
-                var reachable = true;
-                $el.parentsUntil($step).each(function () {
-                    if ($(this).css('display') === 'none') { reachable = false; return false; }
-                });
-                return reachable;
-            }
-            function firstInvalidRequired() {
-                var found = null;
-                $form.find('[required]').each(function () {
-                    if (!isValidatable(this)) { return; }
-                    if (isEmptyField(this)) { found = this; return false; }
-                });
-                return found;
-            }
-            function goToField(el) {
-                var $el = $(el);
-                var step = parseInt($el.closest('[data-step]').data('step'), 10);
-                if (step >= 1) { updateStep(step); }
-                $el.addClass('mptbm_field_error');
-                var $header = $('.mptbm_fixed_header');
-                var offset = ($header.length ? $header.outerHeight() : 0) + 24;
-                $('html, body').animate({ scrollTop: Math.max(0, $el.offset().top - offset) }, 300, function () {
-                    try { $el.trigger('focus'); } catch (e) {}
-                });
-            }
-            $form.on('input change', '.mptbm_field_error', function () {
-                $(this).removeClass('mptbm_field_error');
-            });
-
-            // ---- Saving state ----
-            var $saveBtns = $('.mptbm_header_right').find('input[type="submit"], .button-primary');
-            function setSaving(on) {
-                $form.toggleClass('mptbm_is_saving', on);
-                if (on) {
-                    $saveBtns.each(function () {
-                        var $b = $(this);
-                        if ($b.data('mptbmLabel') == null) { $b.data('mptbmLabel', $b.is('input') ? $b.val() : $b.text()); }
-                        if ($b.is('input')) { $b.val(i18n.saving || 'Saving…'); } else { $b.text(i18n.saving || 'Saving…'); }
-                    }).prop('disabled', true);
-                } else {
-                    $saveBtns.each(function () {
-                        var $b = $(this), lbl = $b.data('mptbmLabel');
-                        if (lbl != null) { if ($b.is('input')) { $b.val(lbl); } else { $b.text(lbl); } }
-                    }).prop('disabled', false);
-                }
-            }
-
-            // ---- Submit ----
-            var submitting = false;
-            $form.on('submit', function (e) {
-                e.preventDefault();
-                if (submitting) { return; }
-
-                var invalid = firstInvalidRequired();
-                if (invalid) {
-                    goToField(invalid);
-                    var name = fieldLabel(invalid);
-                    var msg = name
-                        ? (i18n.required || 'Please complete the required field: %s').replace('%s', name)
-                        : (i18n.required_generic || 'Please complete the highlighted required field.');
-                    showToast('error', msg);
-                    return;
-                }
-
-                if (window.tinyMCE && window.tinyMCE.triggerSave) { try { window.tinyMCE.triggerSave(); } catch (err) {} }
-
-                var fd = new FormData(this);
-                fd.set('action', cfg.action || 'mptbm_ajax_save_rent');
-
-                submitting = true;
-                setSaving(true);
-
-                $.ajax({
-                    url: cfg.ajax_url || window.ajaxurl,
-                    type: 'POST',
-                    data: fd,
-                    processData: false,
-                    contentType: false,
-                    dataType: 'json'
-                }).done(function (res) {
-                    if (res && res.success) {
-                        var d = res.data || {};
-                        showToast('success', d.message || i18n.saved);
-                        if (d.title) { $('.mptbm_page_title').text(d.title); }
-                        if (d.status_slug) {
-                            $('.mptbm_status_pill')
-                                .removeClass('is-publish is-draft is-pending is-private')
-                                .addClass('is-' + d.status_slug)
-                                .text(d.status_label || '');
-                        }
-                        if (d.post_id) { $('input[name="post_id"]').val(d.post_id); }
-                    } else {
-                        var d2 = (res && res.data) || {};
-                        showToast('error', d2.message || i18n.network_error);
-                        if (d2.field) {
-                            var $f = $form.find('[name="' + d2.field + '"]').first();
-                            if ($f.length) { goToField($f[0]); }
-                        }
-                    }
-                }).fail(function (xhr) {
-                    if (window.console) { console.error('[MPTBM] save failed', xhr && xhr.status, xhr && xhr.responseText); }
-                    showToast('error', i18n.network_error || 'Could not save. Please try again.');
-                }).always(function () {
-                    submitting = false;
-                    setSaving(false);
-                });
-            });
-        })();
 
         $('.mptbm_taxi_toggle_trigger').on('change', function() {
             const isChecked = $(this).is(':checked');
@@ -274,29 +24,6 @@
             const label = $(this).closest('.mptbm_taxi_ex_service_toggle_wrapper').find('.mptbm_taxi_ex_service_toggle_label');
             label.text($(this).is(':checked') ? 'ON' : 'OFF');
         });
-
-        $('.mptbm_taxi_btn_prev').on('click', function() {
-            console.log("Returning to previous screen...");
-        });
-
-        /*$('.mptbm_taxi_btn_next').on('click', function (e) {
-            e.preventDefault();
-
-            let data = {
-                action: 'save_mptbm_rent',
-                post_id: $('input[name="post_id"]').val(),
-                mptbm_maximum_passenger: $('input[name="mptbm_maximum_passenger"]').val(),
-                mptbm_maximum_bag: $('input[name="mptbm_maximum_bag"]').val(),
-                mptbm_extra_info: $('textarea[name="mptbm_extra_info"]').val()
-            };
-
-            let formData = $(this).serialize();
-
-
-            $.post(ajaxurl, formData, function (response) {
-                console.log('Saved:', response);
-            });
-        });*/
 
         $('#yourFormID').on('submit', function (e) {
             e.preventDefault();
@@ -716,6 +443,23 @@
             updatePricingContainer();
         });
 
+        // Keeps the "Configure Pricing Rules" header badge in sync with
+        // whichever pricing-model tab is active — mirrors
+        // MPTBM_Rent_Custom_Editor::price_based_label() on the PHP side.
+        function mptbm_pricing_model_label(price_based){
+            var labels = {
+                inclusive: 'Combined Pricing',
+                distance: 'Distance',
+                duration: 'Duration',
+                distance_duration: 'Distance + Duration',
+                fixed_hourly: 'Fixed Hourly',
+                manual: 'Manual Routes',
+                fixed_distance: 'Fixed with Map',
+                fixed_zone: 'Fixed Zone'
+            };
+            return labels[price_based] || 'Combined Pricing';
+        }
+
         function mptbm_hide_all_pricing_content(){
             $("#mptbm_distance_price").fadeOut();
             $("#mptbm_fixed_pricing").fadeOut();
@@ -815,6 +559,7 @@
 
 
             $("#mptbm_pricing_rules_grid").html(rules);
+            $("#mptbm_selected_pricing_model_label").text(mptbm_pricing_model_label(price_based));
         });
 
          $('.mptbm_taxi_ex_service_toggle_wrapper').on('click', '.mptbm_pro_feature_notice', function () {
@@ -846,15 +591,15 @@
                 $("#mptbm_shortcode_primary_code").html(primary_shortcode);
 
                 rules = `<div class="mptbm_pricing_rules_card">
-                                    <h4>Inclusive (Distance + Duration) Based Pricing</h4>
+                                    <h4>Combined Pricing Model</h4>
                                     <p>Price is calculated using both time and distance.</p>
                                     <div class="mptbm_pricing_rules_formula">
                                         (Hourly Rate × Duration) + (KM Rate × Distance)
                                     </div>
                                 </div>`;
 
-                // $('#mptbm_taxi_operation_araea_pricing_group').fadeIn();
-                mptbm_make_check_uncheck_operation_area(1);
+                // $('#mptbm_taxi_operation_araea_pricing_group').fadeOut();
+                mptbm_make_check_uncheck_operation_area(0);
 
             }
             else if(clicked_tab_id === 'mptbm_distance' ){
@@ -1093,7 +838,7 @@
                 $("#mptbm_manual_routes_and_fixed_fare_overrides").fadeIn();
 
                 rules = `<div class="mptbm_pricing_rules_card">
-                                <h4>Inclusive (Distance + Duration) Based Pricing</h4>
+                                <h4>Combined Pricing Model</h4>
                                 <p>Price is calculated using both time and distance.</p>
                                 <div class="mptbm_pricing_rules_formula">
                                     (Hourly Rate × Duration) + (KM Rate × Distance)
@@ -1107,6 +852,7 @@
 
 
             $("#mptbm_pricing_rules_grid").html(rules);
+            $("#mptbm_selected_pricing_model_label").text(mptbm_pricing_model_label(price_based));
             // alert(clicked_tab_id );
         });
 
@@ -1344,11 +1090,11 @@
             const label = $(this).closest('.mptbm_taxi_ex_service_toggle_wrapper').find('.mptbm_taxi_ex_service_toggle_label');
 
             if(isChecked) {
-                label.text('ON');
+                label.text('ON').removeClass('mptbm_taxi_off');
                 $('.mptbm_taxi_ex_service_body').removeClass('mptbm_disabled');
                 $('#mptbm_taxi_ex_service_body').fadeIn();
             } else {
-                label.text('OFF');
+                label.text('OFF').addClass('mptbm_taxi_off');
                 $('.mptbm_taxi_ex_service_body').addClass('mptbm_disabled');
                 $('#mptbm_taxi_ex_service_body').fadeOut();
             }
@@ -1362,11 +1108,11 @@
             const label = $(this).closest('#mptbm_taxi_base_fare_toggle_container').find('.mptbm_display_taxi_base_fare_pricing_level');
 
             if(isChecked) {
-                label.text('ON');
+                label.text('ON').removeClass('mptbm_taxi_off');
                 $('.mptbm_taxi_base_price_body').removeClass('mptbm_disabled');
                 $('#mptbm_taxi_base_price_body').fadeIn();
             } else {
-                label.text('OFF');
+                label.text('OFF').addClass('mptbm_taxi_off');
                 $('.mptbm_taxi_base_price_body').addClass('mptbm_disabled');
                 $('#mptbm_taxi_base_price_body').fadeOut();
             }
@@ -1379,11 +1125,11 @@
             const label = $(this).closest('#mptbm_taxi_base_fare_toggle_container').find('#mptbm_display_operation_area_pricing_on_text');
 
             if(isChecked) {
-                label.text('ON');
+                label.text('ON').removeClass('mptbm_taxi_off');
                 $('.mptbm_taxi_base_price_body').removeClass('mptbm_disabled');
                 $('#mptbm_taxi_operation_araea_pricing_group').fadeIn();
             } else {
-                label.text('OFF');
+                label.text('OFF').addClass('mptbm_taxi_off');
                 $('.mptbm_taxi_base_price_body').addClass('mptbm_disabled');
                 $('#mptbm_taxi_operation_araea_pricing_group').fadeOut();
             }
@@ -1396,21 +1142,54 @@
             const label = $(this).closest('#mptbm_taxi_base_location_toggle_container').find('.mptbm_display_taxi_base_location_pricing_level');
 
             if(isChecked) {
-                label.text('ON');
+                label.text('ON').removeClass('mptbm_taxi_off');
                 $('.mptbm_taxi_base_location_price_body').removeClass('mptbm_disabled');
-                $('#mptbm_taxi_base_location_price_body').fadeIn();
+                $('#mptbm_taxi_base_location_price_lock').fadeIn();
             } else {
-                label.text('OFF');
+                label.text('OFF').addClass('mptbm_taxi_off');
                 $('.mptbm_taxi_base_location_price_body').addClass('mptbm_disabled');
-                $('#mptbm_taxi_base_location_price_body').fadeOut();
+                $('#mptbm_taxi_base_location_price_lock').fadeOut();
             }
         });
+
+        function mptbmRefreshExtraServiceCatalogue() {
+            const $tbody = $('#mptbm_taxi_ex_service_tbody');
+            if (!$tbody.length) {
+                return;
+            }
+
+            const serviceCount = $tbody.children('.mptbm_taxi_ex_service_row').filter(function() {
+                return $(this).attr('data-mptbm-deleted') !== '1';
+            }).length;
+
+            $('#mptbm_taxi_ex_service_count_value').text(serviceCount);
+            $tbody.closest('.mptbm_taxi_ex_service_table_shell').toggleClass('is-empty', serviceCount === 0);
+        }
+
+        function mptbmInitExtraServiceSorting() {
+            const $tbody = $('#mptbm_taxi_ex_service_tbody');
+            if (!$tbody.length || typeof $.fn.sortable !== 'function' || $tbody.hasClass('ui-sortable')) {
+                return;
+            }
+
+            $tbody.sortable({
+                items: '> .mptbm_taxi_ex_service_row:not(.mptbm-row-deleted)',
+                handle: '.mptbm_taxi_ex_service_btn_drag',
+                axis: 'y',
+                opacity: 0.88,
+                placeholder: 'mptbm_taxi_ex_service_sort_placeholder',
+                forcePlaceholderSize: true
+            });
+        }
+
+        mptbmRefreshExtraServiceCatalogue();
+        mptbmInitExtraServiceSorting();
 
         // 2. Extra Service dropdown change (predefined vs custom)
         $(document).on('change', '#mptbm_extra_services_id', function(e) {
             let $select = $(this);
             let service_id = $select.val();
-            let post_id = $('input[name="post_id"]').val();
+            let post_id = $('#post_ID').val();
             let nonce = $('#mptbm_extra_service_nonce').val();
 
             // "Custom" option's value is the vehicle's own post ID, not a
@@ -1418,6 +1197,8 @@
             // instead of hitting the server (which would reject it as invalid).
             if (!service_id || service_id === post_id) {
                 $("#mptbm_taxi_ex_service_tbody").html($('#mptbm_taxi_ex_service_custom_template').html());
+                mptbmRefreshExtraServiceCatalogue();
+                mptbmInitExtraServiceSorting();
                 return;
             }
 
@@ -1433,6 +1214,8 @@
                 success: function (response) {
                     if (response && response.success) {
                         $("#mptbm_taxi_ex_service_tbody").html(response.data.service_date);
+                        mptbmRefreshExtraServiceCatalogue();
+                        mptbmInitExtraServiceSorting();
                     } else {
                         console.error('mptbm: failed to load extra service data', response);
                     }
@@ -1453,9 +1236,15 @@
                     $row.find('input, select, textarea').prop('disabled', true);
                     // hide the row to avoid triggering plugin teardown
                     $row.css('display', 'none').attr('data-mptbm-deleted', '1').addClass('mptbm-row-deleted');
+                    mptbmRefreshExtraServiceCatalogue();
                 } catch (err) {
                     console.error('mptbm: error hiding ex-service row', err);
-                    try { if ($row && $row.length) { $row.css('display', 'none').attr('data-mptbm-deleted', '1'); } } catch (e) { /* ignore */ }
+                    try {
+                        if ($row && $row.length) {
+                            $row.css('display', 'none').attr('data-mptbm-deleted', '1');
+                            mptbmRefreshExtraServiceCatalogue();
+                        }
+                    } catch (e) { /* ignore */ }
                 }
             }
         });
@@ -1465,7 +1254,7 @@
             e.preventDefault();
             const newRow = `
                 <tr class="mptbm_taxi_ex_service_row">
-                    <td>
+                    <td class="mptbm_taxi_ex_service_icon_cell" data-label="Icon">
                         <div class="mp_add_icon_image_area fdColumn">
                             <input type="hidden" name="mptbm_extra_service_icon[]" value=""/>
                             <div class="mp_icon_item dNone">
@@ -1490,23 +1279,27 @@
                             </div>
                         </div>
                     </td>
-                    <td><input type="text" name="service_name[]" placeholder="Service Name" class="mptbm_taxi_ex_service_input" value=""></td>
-                    <td>
-                        <textarea class="mptbm_taxi_ex_service_select" name="extra_service_description[]" placeholder="Desc.."></textarea>
+                    <td data-label="Service name">
+                        <input type="text" name="service_name[]" placeholder="Child seat" class="mptbm_taxi_ex_service_input" value="">
+                        <input type="hidden" name="service_qty_type[]" value="inputbox">
                     </td>
-                    <td><input type="number" class="mptbm_taxi_ex_service_input mptbm_center" value="0"></td>
-                    <td>
-                        <select class="mptbm_taxi_ex_service_select">
-                             <option value="inputbox">Input Box</option>
-                            <option value="dropdown">Dropdown List</option>
-                        </select>
+                    <td data-label="Customer description">
+                        <textarea class="mptbm_taxi_ex_service_select" name="extra_service_description[]" rows="2" placeholder="Briefly explain what is included."></textarea>
                     </td>
-                    <td class="mptbm_taxi_ex_service_actions">
-                        <button class="mptbm_taxi_ex_service_btn_del">🗑️</button>
-                        <button class="mptbm_taxi_ex_service_btn_drag">✥</button>
+                    <td data-label="Price">
+                        <div class="mptbm_taxi_ex_service_price_field">
+                            <span aria-hidden="true">$</span>
+                            <input type="number" name="service_price[]" class="mptbm_taxi_ex_service_input mptbm_center" step="0.01" min="0" placeholder="0.00" value="0">
+                        </div>
+                    </td>
+                    <td class="mptbm_taxi_ex_service_actions" data-label="Actions">
+                        <button type="button" class="mptbm_taxi_ex_service_btn_drag" title="Drag to reorder" aria-label="Drag to reorder service"><span class="dashicons dashicons-move"></span></button>
+                        <button type="button" class="mptbm_taxi_ex_service_btn_del" title="Delete service" aria-label="Delete service"><span class="dashicons dashicons-trash"></span></button>
                     </td>
                 </tr>`;
             $('#mptbm_taxi_ex_service_tbody').append(newRow);
+            mptbmRefreshExtraServiceCatalogue();
+            mptbmInitExtraServiceSorting();
         });
 
         // Function to remove a row (using delegation for dynamic elements)
@@ -1529,6 +1322,50 @@
             $(this).parent('.mptbm_date_input_row').slideUp(200, function() {
                 $(this).remove();
             });
+        });
+
+        // Keep each schedule row's "Default / Custom" status in sync while
+        // the admin changes its start and end time.
+        $(document).on('change', '#mptbm_rent_settings_panel .mptbm_schedule_day_row select', function() {
+            const $row = $(this).closest('.mptbm_schedule_day_row');
+            const hasCustomHours = $row.find('select').filter(function() {
+                return $(this).val() !== '';
+            }).length > 0;
+
+            $row.find('.mptbm_schedule_day_state').text(
+                hasCustomHours ? $row.data('custom-label') : $row.data('inherited-label')
+            );
+            $row.find('.mptbm_schedule_status').toggleClass('is-hidden', !hasCustomHours);
+        });
+
+        // Refresh the modern date cards' status labels immediately, without
+        // making the admin save before the interface reflects their choice.
+        $(document).on('change', '#mptbm_date_type', function() {
+            const $badge = $(this).closest('.mptbm_date_config_section').find('.mptbm_date_mode_badge');
+            const isParticular = $(this).val() === 'particular';
+
+            $badge.find('i')
+                .toggleClass('fa-calendar-day', isParticular)
+                .toggleClass('fa-sync-alt', !isParticular);
+            $badge.find('span').text(
+                isParticular ? $badge.data('particular-label') : $badge.data('repeated-label')
+            );
+        });
+
+        $(document).on('change', 'input[name="mptbm_available_for_all_time"]', function() {
+            const $control = $(this).closest('.mptbm_date_toggle_control');
+            $control.find('.mptbm_date_toggle_status').text(
+                this.checked ? $control.data('enabled-label') : $control.data('disabled-label')
+            );
+        });
+
+        $(document).on('change', '.mptbm_off_days_conainer input[type="checkbox"]', function() {
+            const $container = $(this).closest('.mptbm_off_days_conainer');
+            const count = $container.find('input[type="checkbox"]:checked').length;
+            const $counter = $container.closest('.mptbm_off_days_card').find('.mptbm_off_count');
+            const template = count === 1 ? $counter.data('singular') : $counter.data('plural');
+
+            $counter.text(String(template).replace('%d', count));
         });
 
 
@@ -1594,6 +1431,7 @@
                 $infoBox.find('.mptbm_taxi_advanced_info_col:eq(0) p').text('');
                 $infoBox.find('.mptbm_taxi_advanced_info_col:eq(1) p').text('');
                 $infoBox.find('.mptbm_taxi_advanced_info_col:eq(2) p').text('');
+                $infoBox.find('.mptbm_taxi_advanced_info_col:eq(3) p').text('');
                 return;
             }
 
@@ -1610,6 +1448,7 @@
                     $infoBox.find('.mptbm_taxi_advanced_info_col:eq(0) p').text(response.data.name);
                     $infoBox.find('.mptbm_taxi_advanced_info_col:eq(1) p').text(response.data.username);
                     $infoBox.find('.mptbm_taxi_advanced_info_col:eq(2) p').text(response.data.email);
+                    $infoBox.find('.mptbm_taxi_advanced_info_col:eq(3) p').text(response.data.phone || '');
                     $infoBox.show();
                 } else {
                     $infoBox.hide();
@@ -1620,6 +1459,187 @@
                 $select.prop('disabled', false);
             });
         });
+
+        /**
+         * Driver creation modal.
+         * Creates a Driver user through WordPress AJAX and selects it immediately.
+         */
+        (function initDriverModal() {
+            const $modal = $('#mptbm_driver_modal');
+
+            if (!$modal.length) {
+                return;
+            }
+
+            const $dialog = $modal.find('.mptbm_driver_modal_dialog');
+            const $createButton = $modal.find('.mptbm_create_driver_button');
+            const $error = $modal.find('.mptbm_driver_modal_error');
+            const $notice = $('.mptbm_driver_ajax_notice');
+            let $lastFocusedElement = $();
+
+            function resetDriverForm() {
+                $modal.find('input[type="text"], input[type="email"], input[type="tel"], input[type="password"]').val('').removeClass('is-invalid');
+                $('#mptbm_driver_send_notification').prop('checked', true);
+                $error.removeClass('is-visible').text('');
+            }
+
+            function openDriverModal() {
+                $lastFocusedElement = $(document.activeElement);
+                resetDriverForm();
+                $modal.addClass('is-open').attr('aria-hidden', 'false');
+                $('body').addClass('mptbm_driver_modal_open');
+                window.setTimeout(function() {
+                    $('#mptbm_driver_first_name').trigger('focus');
+                }, 50);
+            }
+
+            function closeDriverModal() {
+                if ($createButton.prop('disabled')) {
+                    return;
+                }
+
+                $modal.removeClass('is-open').attr('aria-hidden', 'true');
+                $('body').removeClass('mptbm_driver_modal_open');
+
+                if ($lastFocusedElement.length) {
+                    $lastFocusedElement.trigger('focus');
+                }
+            }
+
+            function showDriverError(message) {
+                $error.text(message || mptbm_editor_l10n.request_error).addClass('is-visible');
+            }
+
+            function validateDriverFields() {
+                let isValid = true;
+                const requiredFields = [
+                    '#mptbm_driver_first_name',
+                    '#mptbm_driver_username',
+                    '#mptbm_driver_email'
+                ];
+
+                $modal.find('input').removeClass('is-invalid');
+
+                requiredFields.forEach(function(selector) {
+                    const $field = $(selector);
+                    if (!$.trim($field.val()) || !$field.get(0).checkValidity()) {
+                        $field.addClass('is-invalid');
+                        isValid = false;
+                    }
+                });
+
+                const $password = $('#mptbm_driver_password');
+                if ($password.val() && !$password.get(0).checkValidity()) {
+                    $password.addClass('is-invalid');
+                    isValid = false;
+                }
+
+                return isValid;
+            }
+
+            $(document).on('click', '.mptbm_open_driver_modal', function(e) {
+                e.preventDefault();
+                openDriverModal();
+            });
+
+            $modal.on('click', '[data-driver-modal-close]', function(e) {
+                e.preventDefault();
+                closeDriverModal();
+            });
+
+            $dialog.on('click', function(e) {
+                e.stopPropagation();
+            });
+
+            $(document).on('keydown', function(e) {
+                if (!$modal.hasClass('is-open')) {
+                    return;
+                }
+
+                if (e.key === 'Escape') {
+                    e.preventDefault();
+                    closeDriverModal();
+                }
+            });
+
+            $modal.on('keydown', 'input', function(e) {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    $createButton.trigger('click');
+                }
+            });
+
+            $modal.on('input', 'input', function() {
+                $(this).removeClass('is-invalid');
+                $error.removeClass('is-visible').text('');
+            });
+
+            $createButton.on('click', function(e) {
+                e.preventDefault();
+
+                if (!validateDriverFields()) {
+                    showDriverError(mptbm_editor_l10n.required_error);
+                    $modal.find('.is-invalid').first().trigger('focus');
+                    return;
+                }
+
+                const nonce = $('#mptbm_create_driver_nonce').val();
+                const requestData = {
+                    action: 'mptbm_create_driver',
+                    nonce: nonce,
+                    first_name: $.trim($('#mptbm_driver_first_name').val()),
+                    last_name: $.trim($('#mptbm_driver_last_name').val()),
+                    username: $.trim($('#mptbm_driver_username').val()),
+                    email: $.trim($('#mptbm_driver_email').val()),
+                    phone: $.trim($('#mptbm_driver_phone').val()),
+                    password: $('#mptbm_driver_password').val(),
+                    send_notification: $('#mptbm_driver_send_notification').is(':checked') ? 1 : 0
+                };
+
+                $createButton.prop('disabled', true).addClass('is-loading');
+                $error.removeClass('is-visible').text('');
+
+                $.post(mptbm_editor_l10n.ajax_url, requestData)
+                    .done(function(response) {
+                        if (!response || !response.success) {
+                            const message = response && response.data && response.data.message
+                                ? response.data.message
+                                : mptbm_editor_l10n.request_error;
+                            showDriverError(message);
+                            return;
+                        }
+
+                        const $select = $('#mptbm_selected_driver');
+                        const driverId = String(response.data.id);
+
+                        $select.find('option[value="' + driverId + '"]').remove();
+                        $select.append(new Option(response.data.name, driverId, true, true));
+                        $select.trigger('change');
+
+                        $notice
+                            .removeClass('is-error')
+                            .addClass('is-visible is-success')
+                            .text(response.data.message);
+
+                        $createButton.prop('disabled', false).removeClass('is-loading');
+                        closeDriverModal();
+
+                        window.setTimeout(function() {
+                            $notice.removeClass('is-visible is-success').text('');
+                        }, 5000);
+                    })
+                    .fail(function(xhr) {
+                        const response = xhr.responseJSON;
+                        const message = response && response.data && response.data.message
+                            ? response.data.message
+                            : mptbm_editor_l10n.request_error;
+                        showDriverError(message);
+                    })
+                    .always(function() {
+                        $createButton.prop('disabled', false).removeClass('is-loading');
+                    });
+            });
+        })();
 
         /**
          * 4. Navigation Button Actions
@@ -1666,6 +1686,10 @@
         });
 
         $(document).on('click', '.mptbm_taxi_pricing_tab_item_pro', function(){
+            $('#mptbm_pro_popup').fadeIn();
+        });
+
+        $(document).on('click', '.mptbm_pro_lock.is-locked', function(){
             $('#mptbm_pro_popup').fadeIn();
         });
 
@@ -1845,13 +1869,6 @@
 
 
 
-    $(document).on('click', '#mptbm_taxi_pricing_field_free',function( e ){
-        e.preventDefault();
-        if( $(this).hasClass('pro-locked') ){
-            $('.mptbm_pro_popup').fadeIn();
-        }
-    });
-
     $(document).on('click', '.pro-feature-popup', function(e){
         if($(e.target).is('.pro-feature-popup') || $(e.target).is('.close-pro-popup')){
             $('.pro-feature-popup').fadeOut();
@@ -1863,13 +1880,6 @@
             $('.pro-feature-popup').fadeOut();
         }
     });
-
-    function mptbm_disable_pro_feature_in_free(){
-        $('#mptbm_taxi_pricing_field_free')
-            .find('input, textarea, button')
-            .prop('disabled', true);
-    }
-    mptbm_disable_pro_feature_in_free();
 
 
 

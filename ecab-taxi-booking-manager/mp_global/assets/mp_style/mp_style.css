@@ -217,7 +217,7 @@
 	div.mpStyle [class*="_fs_label"] {
 		color: var(--mpl-secondary);
 		/* font-weight: var(--fw-medium); */
-		line-height: 0;
+		line-height: 1.25;
 	}
 	div.mpStyle .fs_50,
 	div.mpStyle [class*="_fs_50"] {
@@ -769,10 +769,7 @@
 		display: block;
 	}
 	.mpStyle .dInlineBlock,
-	.mpStyle [class*="_dInlineBlock"],
-	.mpStyle small,
-	.mpStyle span,
-	.mpStyle strong {
+	.mpStyle [class*="_dInlineBlock"] {
 		display: inline-block;
 	}
 	/**************/
@@ -2472,6 +2469,68 @@
 	}
 	.tabsContent [data-tabs] {
 		display: none;
+		position: relative;
+	}
+
+	/* These boxes render as part of the INITIAL server HTML in WP's native
+	   side-postbox column — mptbm-shell.js only relocates them into the
+	   persistent sidebar (and adds the skeleton overlay there) once it runs,
+	   which is after the browser has already parsed/painted them. Hiding
+	   them here, by plain CSS with no JS dependency, means nothing ever
+	   flashes in its native position before that relocation happens. This
+	   rule lives in a <head>-enqueued stylesheet, so it's active from the
+	   very first paint — .mptbm-page-ready is added to <body> by
+	   mp_hide_tab_skeletons() in mp_script.js once window fully loads.
+	   Scoped to body.post-type-mptbm_rent (WP's automatic admin body class
+	   for this post type's edit screen) — #postimagediv exists on every
+	   post-edit screen across the whole install, and mp_style.css loads
+	   admin-wide, so without this scope every OTHER post type's featured
+	   image would also stay invisible until window.load for no reason. */
+	body.post-type-mptbm_rent:not(.mptbm-page-ready) #postimagediv,
+	body.post-type-mptbm_rent:not(.mptbm-page-ready) .mptbm_payment_method_card,
+	body.post-type-mptbm_rent:not(.mptbm-page-ready) .mptbm_taxi_category_container,
+	body.post-type-mptbm_rent:not(.mptbm-page-ready) .mptbm_quick_tips_card,
+	body.post-type-mptbm_rent:not(.mptbm-page-ready) .mptbm_pricing_rules_wrapper {
+		visibility: hidden;
+	}
+
+	/* Skeleton placeholder shown over a tab panel while the rest of the page
+	   (images, TinyMCE iframes, external fonts/scripts, etc.) is still
+	   loading; injected/removed by mp_script.js on $(document).ready /
+	   $(window).on('load'). Each panel gets its own so switching tabs during
+	   the loading window still shows a placeholder instead of raw content. */
+	.mptbm-tab-skeleton {
+		position: absolute;
+		top: 0;
+		left: 0;
+		right: 0;
+		bottom: 0;
+		z-index: 5;
+		background: #fff;
+		display: flex;
+		flex-direction: column;
+		gap: 16px;
+		padding: 6px 0;
+		opacity: 1;
+		transition: opacity .3s ease;
+	}
+	.mptbm-tab-skeleton.is-hiding {
+		opacity: 0;
+		pointer-events: none;
+	}
+	.mptbm-tab-skeleton-bar {
+		border-radius: 6px;
+		background: linear-gradient(90deg, #eef0f3 25%, #e2e5ea 37%, #eef0f3 63%);
+		background-size: 400% 100%;
+		animation: mptbm-tab-skeleton-shimmer 1.4s ease infinite;
+	}
+	.mptbm-tab-skeleton-bar.h-lg { height: 24px; width: 35%; }
+	.mptbm-tab-skeleton-bar.h-row { height: 42px; width: 100%; }
+	.mptbm-tab-skeleton-bar.w-80 { width: 80%; }
+	.mptbm-tab-skeleton-bar.w-60 { width: 60%; }
+	@keyframes mptbm-tab-skeleton-shimmer {
+		0% { background-position: 100% 50%; }
+		100% { background-position: 0 50%; }
 	}
 	/**************/
 	.mpTabs.tabBorder {
@@ -3833,128 +3892,7 @@
 	}
 }
 /******************************************************************** Date picker ************************************************/
-@media only screen and (min-width: 10px) {
-	table.ui-datepicker-calendar{
-		border-collapse: collapse;
-	}
-	#ui-datepicker-div {
-		padding:2px;
-		background-color: #fff;
-		box-shadow: 0 0 5px #ddd;
-	}
-	table.ui-datepicker-calendar th{
-		padding: 10px;
-		background-color:var(--mpl-secondary);
-		color: var(--mpl-white);
-		border: 1px solid var(--mpl-secondary);
-	}
-	#ui-datepicker-div .ui-datepicker-header {
-		background-color: var(--color_theme);
-		background-image: none;
-		border:1px solid var(--color_theme);
-		padding: var(--dmp_xs);
-		color: var(--color_theme_alter);
-		border-radius: 0;
-		display: -webkit-flex;
-		display: flex;
-		-webkit-justify-content: center;
-		justify-content: center;
-		font-size: var(--fs_h6);
-	}
-	#ui-datepicker-div .ui-datepicker-header .ui-icon {
-		display: none;
-	}
-	#ui-datepicker-div .ui-datepicker-prev {
-		top: 14px;
-		left: 10px;
-		height: 30px;
-		width: 30px;
-		position: absolute;
-		border: 1px solid var(--mpl-white);
-	}
-	#ui-datepicker-div .ui-datepicker-next {
-		top: 14px;
-		right: 10px;
-		height: 30px;
-		width: 30px;
-		position: absolute;
-		border: 1px solid var(--mpl-white);
-	}
-	#ui-datepicker-div .ui-datepicker-prev:hover,
-	#ui-datepicker-div .ui-datepicker-prev:focus,
-	#ui-datepicker-div .ui-datepicker-next:focus,
-	#ui-datepicker-div .ui-datepicker-next:hover {
-		box-shadow: 0 0 0 1px #fff, 0 0 1px 1px #fff;
-		outline: 1px solid transparent;
-	}
-	#ui-datepicker-div .ui-datepicker-header a.ui-datepicker-prev::before,
-	#ui-datepicker-div .ui-datepicker-header a.ui-datepicker-next::before {
-		position: absolute;
-		content: ">";
-		color: #fff;
-		left: 10px;
-		font-size: var(--fs_h3);
-		top: 2px;
-		font-weight: bold;
-		line-height: 1;
-	}
-	#ui-datepicker-div .ui-datepicker-header a.ui-datepicker-prev::before {
-		content: "<";
-	}
-	#ui-datepicker-div .ui-datepicker-header .ui-state-hover {
-		background-color: var(--color_theme);
-		background-image: none;
-		border-color: var(--color_theme);
-	}
-	#ui-datepicker-div .ui-state-default {
-		background-color: transparent;
-		background-image: none;
-		border: none;
-		border-radius: 50%;
-		width: 35px;
-		height: 35px;
-		color: var(--color_theme);
-		font-weight: bold;
-		padding: 0;
-		display: -webkit-flex;
-		display: flex;
-		-webkit-align-items: center;
-		align-items: center;
-		-webkit-justify-content: center;
-		justify-content: center;
-		text-decoration: none;
-	}
-	#ui-datepicker-div a.ui-state-default:hover {
-		background-color: var(--color_theme);
-		color: var(--color_theme_alter);
-	}
-	#ui-datepicker-div .ui-state-active {
-		background-color: var(--color_theme);
-		color: var(--color_theme_alter);
-		background-image: none;
-	}
-	#ui-datepicker-div .ui-datepicker-title {
-		background-color: var(--color_theme);
-		color: var(--color_theme_alter);
-		background-image: none;
-		font-size: var(--fs_h5);
-		display: -webkit-flex;
-		display: flex;
-		margin: 0;
-	}
-	#ui-datepicker-div .ui-datepicker-title select {
-		min-width: 100px;
-		height: 30px;
-		font-size: var(--fs);
-		padding: 0 var(--dmp_xs);
-		text-align: left;
-	}
-	#ui-datepicker-div.ui-datepicker td {
-		background-color: floralwhite;
-		border: 1px solid var(--color_theme);
-		padding: 4px 6px;
-	}
-}
+/* jQuery UI datepicker styles replaced by flatpickr - see mptbm_registration.css */
 /********************************************************************************************************************/
 @media only screen and (min-width: 10px) {
 	.component{

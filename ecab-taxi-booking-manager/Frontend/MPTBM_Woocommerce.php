@@ -769,6 +769,12 @@ if (!class_exists('MPTBM_Woocommerce')) {
 				}
 							
 
+							// Keyed by the specific order item, not just the vehicle: an order
+							// can legitimately contain the same vehicle more than once (e.g. a
+							// recurring series - the same vehicle booked on several different
+							// dates within one order). Keying on (order, vehicle) alone treated
+							// every item after the first as a duplicate of it and skipped
+							// creating its booking entirely, losing that occurrence's own date/price.
 							$existing_booking = get_posts(array(
 								'post_type'      => 'mptbm_booking',
 								'post_status'    => 'any',
@@ -776,7 +782,7 @@ if (!class_exists('MPTBM_Woocommerce')) {
 								'fields'         => 'ids',
 								'meta_query'     => array(
 									array('key' => 'mptbm_order_id', 'value' => $order_id),
-									array('key' => 'mptbm_id', 'value' => $post_id),
+									array('key' => 'mptbm_order_item_id', 'value' => $item_id),
 								),
 							));
 							if ($existing_booking) {
@@ -1251,6 +1257,12 @@ if (!class_exists('MPTBM_Woocommerce')) {
 		/****************************/
 		public function mptbm_add_to_cart()
 			{
+				// This response carries a freshly-verified nonce and mutates the
+				// cart -- a CDN/reverse-proxy or an overly broad caching plugin
+				// rule caching it would serve a stale nonce (Book Now failing for
+				// everyone after the one visitor who first triggered it) or, worse,
+				// replay someone else's cart action.
+				nocache_headers();
 				if (!MPTBM_Function::verify_add_to_cart_nonce()) {
 					wp_send_json_error(
 						array('message' => __('Your booking session expired. Please search again.', 'ecab-taxi-booking-manager')),

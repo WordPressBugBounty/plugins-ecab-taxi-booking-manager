@@ -1,0 +1,876 @@
+/* ================================================================
+   ECAB TAXI BOOKING MANAGER — Admin shell
+   Fixed sidebar + topbar chrome wrapping every plugin admin page
+   (Transportation Lists, Analytics, Bookings, Checkout Fields,
+   Settings, Status, Guideline, API Docs) plus the native
+   post-new.php/post.php edit screen for mptbm_rent. Reuses the
+   design tokens (--mp-*) and card classes already defined in
+   mptbm_taxi_add_edit.css.
+   ================================================================ */
+
+:root {
+    --mp-shell-sidebar-width: 240px;
+    --mp-shell-sidebar-width-compact: 76px;
+    --mp-shell-topbar-height: 52px;
+}
+
+/* ---- Hide WordPress's own chrome on every plugin admin screen ---- */
+body.mptbm-admin #adminmenumain,
+body.mptbm-admin #wpadminbar,
+body.mptbm-admin #wpfooter {
+    display: none;
+}
+body.mptbm-admin #wpcontent,
+body.mptbm-admin #wpfooter {
+    margin-left: 0;
+    padding-left: 0;
+}
+body.mptbm-admin #wpbody-content {
+    padding-bottom: 0;
+}
+/* WP core clears the (hidden) admin bar via `padding-top: 32px` on
+   <html class="wp-toolbar">, not on <body> — so overriding body's margin
+   here did nothing; the 32px gap stayed. This file only ever loads on our
+   own plugin screens, so it's safe to zero it unconditionally. */
+html.wp-toolbar {
+    padding-top: 0;
+}
+body.mptbm-admin-shell #wpbody-content > #screen-meta,
+body.mptbm-admin-shell #wpbody-content > #screen-meta-links,
+body.mptbm-admin-shell #wpbody-content > .notice,
+body.mptbm-admin-shell #wpbody-content > .updated,
+body.mptbm-admin-shell #wpbody-content > .error {
+    display: none !important;
+}
+body.mptbm-admin * ,
+body.mptbm-admin *::before,
+body.mptbm-admin *::after {
+    box-sizing: border-box;
+}
+
+/* Edit screen only (fixed-overlay sidebar/topbar, not the flex shell) —
+   push WP's native post-edit content clear of the overlay. */
+body.mptbm-admin.post-php.post-type-mptbm_rent #wpcontent,
+body.mptbm-admin.post-new-php.post-type-mptbm_rent #wpcontent {
+    margin-left: var(--mp-shell-sidebar-width);
+    padding-top: var(--mp-shell-topbar-height);
+}
+
+/* Native management screens: Service Status, Locations, Extra Services
+   and Operation Areas use WordPress's own list/edit content inside the
+   same fixed ECAB sidebar and topbar chrome. */
+body.mptbm-admin-native #wpcontent {
+    margin-left: var(--mp-shell-sidebar-width);
+    padding-top: var(--mp-shell-topbar-height);
+}
+body.mptbm-admin-native #wpbody-content {
+    min-height: calc(100vh - var(--mp-shell-topbar-height));
+    padding: 0 24px 36px;
+    background: var(--mp-bg-page, #f6f7fb);
+}
+body.mptbm-admin-native #wpbody-content > .wrap {
+    max-width: 98%;
+    margin: 0 auto;
+    padding-top: 24px;
+}
+body.mptbm-admin-native #screen-meta,
+body.mptbm-admin-native #screen-meta-links {
+    display: none !important;
+}
+body.mptbm-admin-native .wrap > h1,
+body.mptbm-admin-native .wrap > .wp-heading-inline {
+    color: var(--mp-text-900, #0f172a);
+    font-weight: 700;
+}
+body.mptbm-admin-native .wp-list-table,
+body.mptbm-admin-native #col-left .col-wrap,
+body.mptbm-admin-native #col-right .col-wrap,
+body.mptbm-admin-native #poststuff .postbox {
+    border-color: var(--mp-border, #e2e8f0);
+    border-radius: var(--mp-r-lg, 14px);
+    box-shadow: 0 8px 28px -24px rgba(15, 23, 42, 0.45);
+}
+body.mptbm-admin-native .wp-list-table {
+    overflow: hidden;
+}
+/* .wrap's top margin and #poststuff's top padding exist to clear the
+   native h1/hr.wp-header-end area — both hidden below, so this reserved
+   space is otherwise just dead gray gap under the fixed topbar. */
+body.mptbm-admin.post-type-mptbm_rent .wrap {
+    margin-top: 0;
+}
+body.mptbm-admin.post-type-mptbm_rent #poststuff {
+    padding-top: 0;
+}
+body.mptbm-admin.post-php.post-type-mptbm_rent .wrap > h1.wp-heading-inline,
+body.mptbm-admin.post-new-php.post-type-mptbm_rent .wrap > h1.wp-heading-inline,
+body.mptbm-admin.post-php.post-type-mptbm_rent .wrap > .page-title-action,
+body.mptbm-admin.post-new-php.post-type-mptbm_rent .wrap > .page-title-action,
+body.mptbm-admin.post-type-mptbm_rent hr.wp-header-end,
+body.mptbm-admin.post-type-mptbm_rent #post-body-content > #titlediv + .inside,
+body.mptbm-admin.post-type-mptbm_rent #screen-meta-links,
+body.mptbm-admin.post-type-mptbm_rent #screen-meta {
+    display: none !important;
+}
+
+/* Hide the native Publish box and (Pro add-on) Service Status taxonomy
+   box — Publish/Update/Draft/Preview are already covered by the custom
+   topbar (mptbm-shell.js proxy-clicks the real #publish/#save-post/
+   #post_status/#post-preview elements inside #submitdiv, so it must
+   stay in the DOM, just hidden — not removed via remove_meta_box()). */
+body.mptbm-admin.post-type-mptbm_rent #submitdiv,
+body.mptbm-admin.post-type-mptbm_rent #mptbm_service_statusdiv {
+    display: none;
+}
+
+/* Hide the native "Transportation Information Settings" postbox title
+   bar — the tab bar itself is the header for the main panel now. */
+#mptbm_rent_settings_panel > .postbox-header {
+    display: none;
+}
+
+div#mptbm_rent_settings_panel {
+    border-radius: 15px;
+}
+
+/* The "Transportation Details" side metabox itself is left empty once
+   mptbm-shell.js relocates its Categories/Tags and Quick Tips cards into
+   the persistent sidebar (and its Pro-upsell card renders nothing when
+   Pro is active) — hide the now-empty shell. It must stay in the DOM
+   (not be deregistered via remove_meta_box()), since that's exactly
+   where the relocated cards are relocated FROM. */
+#mptbm_rent_right_side_panel {
+    display: none;
+}
+
+/* WP core's own postbox styling ("#poststuff .stuffbox>h3, #poststuff h2,
+   #poststuff h3.hndle", specificity 1,0,1) matches every card's own <h2>
+   title inside this metabox and beats mptbm_taxi_add_edit.css's plain
+   ".mptbm_rent_editor_title" class (0,1,0) — an ID always outranks any
+   number of classes — silently forcing every card title to WP's own
+   font-size/margin/padding/line-height instead of ours. Re-scoping under
+   this panel's own ID (1,1,0) beats it back. */
+#mptbm_rent_settings_panel .mptbm_rent_editor_header h2,
+#mptbm_rent_settings_panel .mptbm_rent_editor_header h3,
+#mptbm_rent_settings_panel .mptbm_rent_editor_header h4 {
+    margin: 0 0 3px;
+    padding: 0;
+    font-size: 15px;
+    font-weight: 700;
+    line-height: 1.35;
+}
+#mptbm_rent_settings_panel .mptbm_rent_editor_header .mptbm_rent_editor_title {
+    margin: 0 0 3px;
+    padding: 0;
+    font-size: 16px;
+    font-weight: 700;
+    line-height: 1.35;
+}
+/* Same fix, but for ".mptbm_rent_editor_title" instances that AREN'T
+   wrapped in ".mptbm_rent_editor_header" (e.g. the Pricing tab's "Select
+   Pricing Model" <h3> and "Select Operation Area Based Pricing Model"
+   <h3>) — still needs the ID to beat WP core, just without requiring
+   that specific ancestor. */
+#mptbm_rent_settings_panel .mptbm_rent_editor_title {
+    margin: 0 0 3px;
+    padding: 0;
+    font-size: 16px;
+    font-weight: 700;
+    line-height: 1.35;
+}
+
+/* mp_global's mp_style.css resets EVERY <h3>/<h4> inside ".mpStyle" to its
+   own generic heading scale (h3: 22px, h4: var(--fs_h4), both quite large)
+   — loaded after this plugin's own CSS, so on the same 0,1,1 specificity
+   it wins by source order alone, blowing up every one of the Pricing
+   tab's own small, purpose-built headings (pricing-model cards, the
+   pricing-rules formula card, route-override sub-headers, the shortcode
+   guide) to that oversized default. Re-declaring each one's own intended
+   size under this panel's ID beats it back, the same way the card titles
+   above were already fixed. */
+#mptbm_rent_settings_panel .mptbm_taxi_pricing_tab_info h4 {
+    margin: 0 0 2px;
+    font-size: 13px;
+    font-weight: 700;
+    line-height: 1.3;
+}
+#mptbm_rent_settings_panel .mptbm_pricing_rules_card h4 {
+    margin: 0 0 6px;
+    font-size: 14px;
+    font-weight: 700;
+    line-height: 1.35;
+}
+#mptbm_rent_settings_panel .mptbm_taxi_pricing_sub_header h4 {
+    margin: 0 0 4px;
+    font-size: 15px;
+    font-weight: 700;
+    line-height: 1.35;
+}
+#mptbm_rent_settings_panel .mptbm_shortcode_header_text h3 {
+    margin: 0;
+    font-size: 14px;
+    font-weight: 700;
+    line-height: 1.35;
+}
+
+/* ================================================================
+   Flex shell (the 8 dashboard-style pages)
+   ================================================================ */
+.mptbm-shell-content-and-menu {
+    display: flex;
+    align-items: stretch;
+    min-height: 100vh;
+}
+
+.mptbm-shell-sidebar {
+    flex: 0 0 var(--mp-shell-sidebar-width);
+    width: var(--mp-shell-sidebar-width);
+    background: var(--mp-white, #fff);
+    border-right: 1px solid var(--mp-border, #e2e8f0);
+    display: flex;
+    flex-direction: column;
+    position: sticky;
+    top: 0;
+    height: 100vh;
+    transition: width .15s ease, flex-basis .15s ease;
+    font-family: var(--mp-font, -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif);
+}
+.mptbm-shell.side-menu-compact .mptbm-shell-sidebar {
+    flex-basis: var(--mp-shell-sidebar-width-compact);
+    width: var(--mp-shell-sidebar-width-compact);
+}
+
+.mptbm-shell-sidebar-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px;
+    border-bottom: 1px solid var(--mp-border, #e2e8f0);
+    min-height: var(--mp-shell-topbar-height);
+}
+
+.mptbm-shell-logo {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-weight: 700;
+    color: var(--mp-text-900, #0f172a);
+    overflow: hidden;
+    white-space: nowrap;
+}
+.mptbm-shell-logo-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    border-radius: var(--mp-r-sm, 6px);
+    background: var(--mp-primary, #4f46e5);
+    color: #fff;
+    flex: 0 0 auto;
+    font-size: 13px;
+}
+.mptbm-shell.side-menu-compact .mptbm-shell-logo-text { display: none; }
+
+.mptbm-shell-fold-trigger {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    border-radius: var(--mp-r-sm, 6px);
+    color: var(--mp-text-500, #64748b);
+    text-decoration: none;
+    flex: 0 0 auto;
+}
+.mptbm-shell-fold-trigger:hover {
+    background: var(--mp-bg-muted, #f1f5f9);
+    color: var(--mp-text-900, #0f172a);
+}
+
+.mptbm-shell-menu {
+    list-style: none;
+    margin: 12px 0 0;
+    padding: 0 10px;
+    flex: 1;
+    overflow-y: auto;
+}
+.mptbm-shell-menu li { margin: 0 0 2px; }
+.mptbm-shell-menu li > a {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 12px;
+    border-radius: var(--mp-r-sm, 6px);
+    color: var(--mp-text-600, #475569);
+    text-decoration: none;
+    font-size: 14px;
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+}
+.mptbm-shell-menu li > a i {
+    width: 18px;
+    flex: 0 0 auto;
+    text-align: center;
+    font-size: 15px;
+}
+.mptbm-shell-menu li > a .mptbm-shell-menu-arrow {
+    width: auto;
+    margin-left: auto;
+    font-size: 11px;
+    transition: transform .15s ease;
+}
+.mptbm-shell-menu li.has-children > a .mptbm-shell-menu-arrow {
+    transform: rotate(180deg);
+}
+.mptbm-shell-menu li.has-children.mptbm-shell-submenu-collapsed > a .mptbm-shell-menu-arrow {
+    transform: rotate(0deg);
+}
+.mptbm-shell-menu li.has-children.mptbm-shell-submenu-collapsed > .mptbm-shell-submenu {
+    display: none;
+}
+.mptbm-shell.side-menu-compact .mptbm-shell-menu li > a span { display: none; }
+.mptbm-shell.side-menu-compact .mptbm-shell-menu li > a .mptbm-shell-menu-arrow { display: none; }
+.mptbm-shell.side-menu-compact .mptbm-shell-submenu { display: none; }
+.mptbm-shell-menu li > a:hover {
+    background: var(--mp-bg-muted, #f1f5f9);
+    color: var(--mp-text-900, #0f172a);
+}
+.mptbm-shell-menu li.is-active > a {
+    background: var(--mp-primary-light, #f0efff);
+    color: var(--mp-primary, #4f46e5);
+}
+.mptbm-shell-menu li.is-active > a i { color: var(--mp-primary, #4f46e5); }
+
+/* Sub-menu (Transportation's All/Published/Draft/Trash sub-views) */
+.mptbm-shell-submenu {
+    list-style: none;
+    margin: 4px 0 8px;
+    padding: 0 0 0 30px;
+}
+.mptbm-shell-submenu li { margin: 0 0 2px; }
+.mptbm-shell-submenu > li > a {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 10px;
+    border-radius: var(--mp-r-sm, 6px);
+    color: var(--mp-text-500, #64748b);
+    font-size: 13px;
+    text-decoration: none;
+}
+.mptbm-shell-submenu > li > a i { width: 16px; text-align: center; font-size: 13px; }
+.mptbm-shell-submenu > li > a:hover {
+    background: var(--mp-bg-muted, #f1f5f9);
+    color: var(--mp-text-900, #0f172a);
+}
+
+.mptbm-shell-back-to-wp {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 14px 20px;
+    border-top: 1px solid var(--mp-border, #e2e8f0);
+    background: var(--mp-primary, #4f46e5);
+    color: #fff;
+    text-decoration: none;
+    font-size: 13px;
+    white-space: nowrap;
+    overflow: hidden;
+}
+.mptbm-shell-back-to-wp:hover { color: #fff; }
+.mptbm-shell-back-to-wp i { color: #fff; }
+.mptbm-shell.side-menu-compact .mptbm-shell-back-to-wp span { display: none; }
+
+.mptbm-shell-content {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+}
+.mptbm-shell-topbar {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    min-height: var(--mp-shell-topbar-height);
+    padding: 0 24px;
+    background: var(--mp-white, #fff);
+    border-bottom: 1px solid var(--mp-border, #e2e8f0);
+}
+.mptbm-shell-mobile-trigger {
+    display: none;
+    color: var(--mp-text-500, #64748b);
+    text-decoration: none;
+}
+.mptbm-shell-topbar-spacer { flex: 1; }
+.mptbm-shell-topbar-link {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    color: var(--mp-text-500, #64748b);
+    text-decoration: none;
+}
+.mptbm-shell-topbar-link:hover {
+    background: var(--mp-bg-muted, #f1f5f9);
+    color: var(--mp-text-900, #0f172a);
+}
+.mptbm-shell-user-avatar {
+    width: 34px;
+    height: 34px;
+    border-radius: 50%;
+    background-size: cover;
+    background-position: center;
+    border: 1px solid var(--mp-border, #e2e8f0);
+}
+
+.mptbm-shell-body {
+    padding: 0;
+    background: var(--mp-bg, #f7f9fc);
+    flex: 1;
+}
+
+.mptbm-shell-loadbar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    height: 3px;
+    width: 0;
+    background: var(--mp-primary, #4f46e5);
+    z-index: 999999;
+    opacity: 0;
+    pointer-events: none;
+    transition: width .4s ease, opacity .3s ease .1s;
+}
+.mptbm-shell-loadbar.is-active { opacity: 1; transition: width .4s ease, opacity .15s ease; }
+.mptbm-shell-loadbar.is-done { width: 100% !important; opacity: 0; transition: width .2s ease, opacity .4s ease .2s; }
+
+/* ================================================================
+   Fixed-overlay variant (native edit screen)
+   ================================================================ */
+.mptbm-shell-sidebar.mptbm-shell-fixed {
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    height: auto;
+    z-index: 9990;
+}
+
+/* ---- Topbar (edit screen) ---- */
+.mptbm-edit-topbar {
+    position: fixed;
+    top: 0;
+    left: var(--mp-shell-sidebar-width);
+    right: 0;
+    z-index: 9980;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    height: var(--mp-shell-topbar-height);
+    padding: 0 20px;
+    background: var(--mp-white, #fff);
+    border-bottom: 1px solid var(--mp-border, #e2e8f0);
+    box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+    font-family: var(--mp-font, -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif);
+}
+
+.mptbm-edit-topbar-back {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--mp-text-600, #475569);
+    text-decoration: none;
+    font-size: 13px;
+    font-weight: 600;
+    flex-shrink: 0;
+}
+.mptbm-edit-topbar-back:hover { color: var(--mp-primary, #4f46e5); }
+
+.mptbm-edit-topbar-title {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    text-align: center;
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--mp-text-900, #0f172a);
+}
+
+.mptbm-edit-topbar-actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-shrink: 0;
+}
+
+.mptbm-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    border-radius: var(--mp-r-sm, 6px);
+    font-weight: 600;
+    cursor: pointer;
+    transition: var(--mp-transition, all 0.2s ease);
+}
+.mptbm-btn-outline {
+    background: var(--mp-white, #fff);
+    border: 1px solid var(--mp-border-dark, #cbd5e1);
+    color: var(--mp-text-600, #475569);
+}
+.mptbm-btn-outline:hover { border-color: var(--mp-primary-border, #c4b5fd); color: var(--mp-primary, #4f46e5); }
+.mptbm-btn-sm { padding: 6px 12px; font-size: 12.5px; }
+
+/* ---- Split Update / Save Draft button ---- */
+.mptbm-split-publish {
+    position: relative;
+    display: flex;
+}
+.mptbm-split-publish__main,
+.mptbm-split-publish__toggle {
+    border: none;
+    background: var(--mp-primary, #4f46e5);
+    color: #fff;
+    cursor: pointer;
+    font-weight: 600;
+    font-size: 13px;
+}
+.mptbm-split-publish__main {
+    padding: 7px 16px;
+    border-radius: var(--mp-r-sm, 6px) 0 0 var(--mp-r-sm, 6px);
+}
+.mptbm-split-publish__main:hover { background: var(--mp-primary-hover, #3730a3); }
+.mptbm-split-publish__toggle {
+    padding: 7px 8px;
+    border-left: 1px solid rgba(255,255,255,0.25);
+    border-radius: 0 var(--mp-r-sm, 6px) var(--mp-r-sm, 6px) 0;
+    display: inline-flex;
+    align-items: center;
+}
+.mptbm-split-publish__toggle:hover { background: var(--mp-primary-hover, #3730a3); }
+
+.mptbm-split-publish__menu {
+    position: absolute;
+    top: calc(100% + 6px);
+    right: 0;
+    min-width: 160px;
+    background: var(--mp-white, #fff);
+    border: 1px solid var(--mp-border, #e2e8f0);
+    border-radius: var(--mp-r-md, 10px);
+    box-shadow: var(--mp-shadow-lg, 0 10px 15px -3px rgba(0,0,0,0.08));
+    padding: 6px;
+    display: none;
+    z-index: 1000;
+}
+.mptbm-split-publish.is-open .mptbm-split-publish__menu { display: block; }
+
+.mptbm-split-publish__item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 8px 10px;
+    border: none;
+    background: none;
+    color: var(--mp-text-700, #334155);
+    font-size: 13px;
+    font-weight: 500;
+    text-align: left;
+    border-radius: var(--mp-r-sm, 6px);
+    cursor: pointer;
+}
+.mptbm-split-publish__item:hover { background: var(--mp-bg-muted, #f1f5f9); }
+
+/* ---- Native Title field + content editor: left in their default DOM
+   position (no longer relocated by mptbm-shell.js) and hidden here, since
+   the "General Info" tab's own "Basic Information" card already covers
+   Title/Description and showing both was a duplicate. Must stay in the DOM
+   (not be deregistered), since name="post_title"/"content" still need to
+   submit as part of the normal post form. ---- */
+body.mptbm-admin.post-type-mptbm_rent #titlediv,
+body.mptbm-admin.post-type-mptbm_rent #postdivrich {
+    display: none;
+}
+
+/* ================================================================
+   Information Settings panel — the tab bar itself (pill-row layout,
+   active-tab background/icon treatment, etc.) is now owned entirely by
+   Section 5b in mptbm_taxi_add_edit.css (the centered numbered stepper).
+   This block used to duplicate that styling here at #id-level specificity
+   — which unconditionally beat every class-based rule in Section 5b
+   regardless of how specific those got, so the two designs were fighting
+   each other: the stepper's circular icons/connector line/3-state colors
+   were being silently overridden back to this pill-tab look (white
+   active-pill background, 26px rounded-square icon, lavender bar). Only
+   .mpTabs.leftTabs's column direction is still needed here (Section 5b
+   doesn't re-set it under this ID), so that one rule stays.
+   ================================================================ */
+#mptbm_rent_settings_panel .mpTabs.leftTabs {
+    flex-direction: column;
+}
+
+/* ---- Two-column body: cards left, persistent sidebar (featured
+   image) right. The flex row lives on .mptbm-panel-row, ONE level
+   above .tabsContent — not on .tabsContent itself — so the sidebar is
+   never a flex-item sibling of the switchable .tabsItem panels. During
+   a tab switch, mp_script.js's slideUp()/slideDown() cross-fade leaves
+   the outgoing AND incoming panels both non-"none" for ~350ms; if the
+   sidebar sat inside that same flex row, that momentary 3rd item would
+   shove it sideways on every click. One level up, .mptbm-panel-row's
+   only two children (.tabsContent as a whole, and the sidebar) never
+   change count, so it never reflows from what happens inside
+   .tabsContent. Scoped to this metabox so it doesn't affect
+   .tabsContent elsewhere (e.g. the Global Settings page reuses the
+   same framework class). ---- */
+#mptbm_rent_settings_panel .mptbm-panel-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 24px;
+    margin-top: 10px;
+    flex-wrap: wrap;
+}
+#mptbm_rent_settings_panel .mptbm-panel-row > .tabsContent {
+    order: 1;
+    flex: 1 1 640px;
+    min-width: 0;
+    padding: 0;
+    overflow: visible;
+}
+.mptbm-tabs-sidebar {
+    order: 2;
+    flex: 0 0 300px;
+    margin-top: 0;
+    margin-bottom: 70px;
+    position: sticky;
+    top: calc(var(--mp-shell-topbar-height) + 20px);
+}
+
+/* ---- Floating Previous/Next tab-step bar. `order: 3` (rather than
+   relying on DOM position) so it stays visually last regardless of
+   whether mptbm-shell.js has appended .mptbm-tabs-sidebar yet — that
+   append happens after this bar is already in the markup, which would
+   otherwise put it between the two columns instead of below them. ---- */
+.mptbm-panel-row-nav {
+    order: 3;
+    flex: 1 1 100%;
+    position: sticky;
+    bottom: 0px;
+    margin-top: 8px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    background: var(--mp-white, #fff);
+    border: 1px solid var(--mp-border, #e2e8f0);
+    border-radius: 0;
+    box-shadow: 0 10px 30px -8px rgba(15, 23, 42, 0.18), 0 2px 6px rgba(15, 23, 42, 0.08);
+    padding: 18px 18px;
+    z-index: 5;
+}
+.mptbm-panel-row-nav__step {
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--mp-text-500, #64748b);
+}
+/* Absolutely centered on the bar itself (not the flex row alongside the
+   step label) so Previous/Next stay dead-center regardless of how long
+   the step label text is — .mptbm-panel-row-nav's own `position: sticky`
+   already acts as the containing block for this. */
+.mptbm-panel-row-nav__btns {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%);
+}
+.mptbm-panel-row-nav .mptbm-btn {
+    padding: 8px 16px;
+    gap: 8px;
+    font-size: 13px;
+    font-weight: 600;
+}
+.mptbm-btn-primary {
+    background: var(--mp-primary, #4f46e5);
+    border: 1px solid var(--mp-primary, #4f46e5);
+    color: #fff;
+}
+.mptbm-btn-primary:hover {
+    background: var(--mp-primary-hover, #3730a3);
+    border-color: var(--mp-primary-hover, #3730a3);
+}
+/* Same outline treatment already used for Prev/Next elsewhere on this
+   site (the edit topbar's Preview button, the Booking List pagination) —
+   reusing that existing pattern instead of inventing a new color here. */
+.mptbm-btn-secondary {
+    background: var(--mp-white, #fff);
+    border: 1px solid var(--mp-border-dark, #cbd5e1);
+    color: var(--mp-text-600, #475569);
+}
+.mptbm-btn-secondary:hover {
+    border-color: var(--mp-primary-border, #c4b5fd);
+    color: var(--mp-primary, #4f46e5);
+}
+.mptbm-panel-row-nav__prev.is-disabled,
+.mptbm-panel-row-nav__next.is-disabled {
+    opacity: .4;
+    pointer-events: none;
+}
+
+/* ---- Featured image dropzone (relabeled by mptbm-shell.js) ---- */
+.mptbm-tabs-sidebar #postimagediv {
+    background: var(--mp-white, #fff);
+    border: 1px solid var(--mp-border, #e2e8f0);
+    border-radius: var(--mp-r-lg, 16px);
+    box-shadow: 0 5px 15px -5px rgba(115,125,146,.11), 0 1px 2px 0 rgba(160,170,185,.6);
+    overflow: hidden;
+}
+.mptbm-tabs-sidebar #postimagediv .postbox-header {
+    display: none;
+}
+.mptbm-tabs-sidebar #postimagediv .inside {
+    margin: 0;
+    padding: 16px;
+}
+.mptbm-tabs-sidebar .mptbm-featured-image-placeholder {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    text-align: center;
+    padding: 32px 16px;
+    border: 2px dashed var(--mp-border-dark, #cbd5e1);
+    border-radius: var(--mp-r-md, 10px);
+    color: var(--mp-text-500, #64748b);
+    cursor: pointer;
+}
+.mptbm-tabs-sidebar .mptbm-featured-image-placeholder:hover {
+    border-color: var(--mp-primary-border, #c4b5fd);
+    background: var(--mp-primary-light, #f0efff);
+}
+.mptbm-tabs-sidebar .mptbm-featured-image-placeholder i {
+    font-size: 26px;
+    color: var(--mp-primary, #4f46e5);
+}
+.mptbm-tabs-sidebar .mptbm-featured-image-placeholder strong {
+    font-size: 13px;
+    color: var(--mp-text-800, #1e293b);
+}
+.mptbm-tabs-sidebar .mptbm-featured-image-placeholder span {
+    font-size: 12px;
+    color: var(--mp-text-500, #64748b);
+}
+.mptbm-tabs-sidebar img.hide-if-no-js {
+    width: 100%;
+    border-radius: var(--mp-r-sm, 6px);
+}
+.mptbm-tabs-sidebar .mptbm_taxi_category_container {
+    margin-top: 16px;
+}
+.mptbm-tabs-sidebar .mptbm_quick_tips_card {
+    margin-top: 16px;
+}
+.mptbm-tabs-sidebar .mptbm_payment_method_card {
+    margin-bottom: 16px;
+}
+.mptbm-featured-image-actions {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-top: 10px;
+}
+.mptbm-featured-image-actions .mptbm-change-image {
+    color: var(--mp-primary, #4f46e5);
+    font-weight: 600;
+    font-size: 12.5px;
+    cursor: pointer;
+}
+.mptbm-featured-image-actions p {
+    margin: 0;
+}
+.mptbm-featured-image-actions a {
+    font-size: 12.5px;
+    color: var(--mp-text-500, #64748b);
+}
+.mptbm-featured-image-actions a.mptbm-inert {
+    pointer-events: none;
+    opacity: .5;
+}
+
+/* ================================================================
+   Information Settings panel — info-card re-theme
+   Matches car-rental-manager's .mpcrbm-info-card look (flat grey
+   header with icon + title, white body) instead of ecab's older
+   gradient-blue header, reusing the same .mptbm_rent_editor_wrapper/
+   _header/_title/_subtitle/_body markup already in place — no PHP
+   structure changes needed beyond the icons already added inline.
+   ================================================================ */
+.mptbm_rent_editor_wrapper {
+    border-radius: var(--mp-r-lg, 16px) !important;
+    box-shadow: 0 5px 15px -5px rgba(115,125,146,.11), 0 1px 2px 0 rgba(160,170,185,.6) !important;
+}
+.mptbm_rent_editor_header {
+    background: #f2f4f7 !important;
+    padding: 16px 20px !important;
+    gap: 10px;
+}
+.mptbm_rent_editor_header h2,
+.mptbm_rent_editor_header h3,
+.mptbm_rent_editor_header h4,
+.mptbm_rent_editor_title {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+.mptbm_rent_editor_header i,
+.mptbm_rent_editor_title > i:first-child {
+    color: var(--mp-primary, #4f46e5);
+    font-size: 15px;
+    width: 18px;
+    text-align: center;
+    flex: 0 0 auto;
+}
+.mptbm_rent_editor_body { padding: 18px 20px; }
+
+/* ================================================================
+   Responsive
+   ================================================================ */
+@media (max-width: 960px) {
+    /* Flex shell (dashboard pages) — sidebar becomes an off-canvas drawer */
+    .mptbm-shell-sidebar:not(.mptbm-shell-fixed) {
+        position: fixed;
+        left: -100%;
+        top: 0;
+        z-index: 100000;
+        box-shadow: var(--mp-shadow-lg, 0 10px 15px -3px rgba(0,0,0,0.08));
+        transition: left .2s ease;
+    }
+    .mptbm-shell.mobile-menu-open .mptbm-shell-sidebar:not(.mptbm-shell-fixed) {
+        left: 0;
+    }
+    .mptbm-shell-mobile-trigger { display: inline-flex; }
+
+    /* Fixed overlay (edit screen) — same drawer behavior */
+    .mptbm-shell-sidebar.mptbm-shell-fixed { left: -100%; transition: left .2s ease; }
+    body.mptbm-mobile-menu-open .mptbm-shell-sidebar.mptbm-shell-fixed { left: 0; }
+    .mptbm-edit-topbar { left: 0; }
+    body.mptbm-admin.post-php.post-type-mptbm_rent #wpcontent,
+    body.mptbm-admin.post-new-php.post-type-mptbm_rent #wpcontent {
+        margin-left: 0;
+    }
+    body.mptbm-admin-native #wpcontent {
+        margin-left: 0;
+    }
+}
+@media (max-width: 782px) {
+    .mptbm-edit-topbar {
+        flex-wrap: wrap;
+        height: auto;
+        min-height: 52px;
+        padding: 8px 14px;
+    }
+}

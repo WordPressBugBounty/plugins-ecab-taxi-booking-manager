@@ -202,11 +202,17 @@ if (!class_exists('MPTBM_Dummy_Import')) {
 							if (array_key_exists('post_data', $dummy_data)) {
 								foreach ($dummy_data['post_data'] as $meta_key => $data) {
 									if ($meta_key == 'feature_image') {
+										// This was falling through to the generic
+										// update_post_meta() below too (separate if,
+										// not elseif), leaving the raw demo image URL
+										// permanently stored as literal 'feature_image'
+										// postmeta - which the transportation list then
+										// preferred over the real, current featured
+										// image forever after (see MPTBM_Transportation.php).
 										$url = $data;
 										$image = media_sideload_image($url, $post_id, null, 'id');
 										set_post_thumbnail($post_id, $image);
-									}
-									if ($meta_key == 'mptbm_extra_services_id') {
+									} elseif ($meta_key == 'mptbm_extra_services_id') {
 										update_post_meta($post_id, $meta_key, $pre_extra_service_id);
 									} else {
 										update_post_meta($post_id, $meta_key, $data);
@@ -274,14 +280,14 @@ if (!class_exists('MPTBM_Dummy_Import')) {
 		public function dummy_post_data(): array
 		{
 
-			$feature_image[0] = 'https://img.freepik.com/free-photo/white-sport-sedan-with-colorful-tuning-road_114579-5044.jpg';
-			$feature_image[1] = 'https://img.freepik.com/free-photo/blue-car-driving-road_114579-4056.jpg';
-			$feature_image[2] = 'https://img.freepik.com/free-photo/yellow-sport-car-with-black-autotuning-highway-front-view_114579-5060.jpg';
-			$feature_image[3] = 'https://img.freepik.com/free-photo/black-luxury-jeep-driving-road_114579-4058.jpg';
-			$feature_image[4] = 'https://img.freepik.com/free-photo/vintage-sedan-car-driving-road_114579-5065.jpg';
-			$feature_image[5] = 'https://img.freepik.com/free-photo/sport-car-with-black-white-autotuning-driving-forest_114579-4076.jpg';
-			$feature_image[6] = 'https://img.freepik.com/free-photo/black-luxury-jeep-driving-road_114579-4058.jpg';
-			$feature_image[7] = 'https://img.freepik.com/free-photo/grey-luxury-sedan-car-sunset_114579-4045.jpg';
+			$feature_image[0] = 'https://raw.githubusercontent.com/magepeopleteam/dummy-images/main/ecab-taxi/car-1.jpg';
+			$feature_image[1] = 'https://raw.githubusercontent.com/magepeopleteam/dummy-images/main/ecab-taxi/car-2.jpg';
+			$feature_image[2] = 'https://raw.githubusercontent.com/magepeopleteam/dummy-images/main/ecab-taxi/car-3.jpg';
+			$feature_image[3] = 'https://raw.githubusercontent.com/magepeopleteam/dummy-images/main/ecab-taxi/car-4.jpg';
+			$feature_image[4] = 'https://raw.githubusercontent.com/magepeopleteam/dummy-images/main/ecab-taxi/car-5.jpg';
+			$feature_image[5] = 'https://raw.githubusercontent.com/magepeopleteam/dummy-images/main/ecab-taxi/car-6.jpg';
+			$feature_image[6] = 'https://raw.githubusercontent.com/magepeopleteam/dummy-images/main/ecab-taxi/car-7.jpg';
+			$feature_image[7] = 'https://raw.githubusercontent.com/magepeopleteam/dummy-images/main/ecab-taxi/car-8.jpg';
 			return [
 				'custom_post' => [
 					'mptbm_extra_services' => [

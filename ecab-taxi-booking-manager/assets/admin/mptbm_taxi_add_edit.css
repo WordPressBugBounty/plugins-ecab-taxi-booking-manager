@@ -89,14 +89,14 @@
 }
 
 .wrap a.mptbm-add-btn {
-    margin-left: 8px;
+    margin-left: 0;
     padding: 4px 14px;
     border-radius: var(--mp-r-sm);
     font-size: 13px;
     line-height: 2.15;
     vertical-align: top;
     display: inline-block;
-    margin-top: 6px;
+    margin-top: 0;
     background: var(--mp-primary-light);
     color: var(--mp-primary);
     border: 1px solid var(--mp-primary-border);
@@ -155,6 +155,12 @@
     font-weight: 400;
 }
 
+#mptbm_rent_settings_panel {
+    border: 1px solid #ddd;
+    border-radius: 15px;
+    margin-left: 20px;
+}
+
 /* ================================================================
    SECTION 4: FIXED HEADER
    ================================================================ */
@@ -173,7 +179,7 @@
 
 .mptbm_fixed_header_top {
     display: flex;
-    justify-content: space-between;
+    justify-content: center;
     align-items: center;
     height: 52px;
     padding: 0 20px;
@@ -181,19 +187,20 @@
     gap: 16px;
 }
 
-/* Left cluster: back button + title block */
-.mptbm_header_lead {
+/* Fix V alignment of back-link + add-new wrapper */
+.mptbm_fixed_header_top > div:first-child {
     display: flex;
     align-items: center;
-    gap: 14px;
-    min-width: 0;
-    flex: 1;
+    gap: 4px;
+}
+.mptbm_fixed_header_top .mptbm-add-btn {
+    margin-top: 0;
+    vertical-align: middle;
+    line-height: 2.4;
 }
 
-.mptbm_back_btn {
-    width: 36px;
-    height: 36px;
-    flex-shrink: 0;
+/* Back link */
+.mptbm_fixed_header_top a.mptbm-link {
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -263,11 +270,8 @@
 .mptbm_status_pill.is-pending { color: #1d4ed8; background: #dbeafe; }
 .mptbm_status_pill.is-private { color: #6d28d9; background: #ede9fe; }
 
-/* Page Title
-   Scoped under .mptbm_fixed_header_top so it beats WordPress core's
-   `.wrap h1` (23px + 9px/4px padding), which would otherwise overflow
-   the fixed-height header row and clip the eyebrow above it. */
-.mptbm_header_left { flex: 1; min-width: 0; }  /* legacy hook, kept harmless */
+/* Page Title */
+.mptbm_header_left { flex: 1; min-width: 0; text-align: center; }
 
 .mptbm_fixed_header_top .mptbm_page_title {
     margin: 0;
@@ -489,6 +493,191 @@
 }
 
 /* ================================================================
+   SECTION 5b: EDITOR TAB LIST -> CENTERED STEPPER
+   The .mptbm_taxi_stepper markup above isn't rendered anywhere; the
+   editor's real tab nav is .mpTabs.leftTabs > .tabLists > [data-tabs-target]
+   (see MPTBM_Rent_Custom_Editor.php). Re-skin those actual elements to
+   match a checkout-style progress stepper: solid-fill circle, thick
+   per-segment connector line, "STEP N" eyebrow (CSS counter, no markup
+   change) over a bold label — with 3 states (done / current / upcoming)
+   colored like a real wizard. These tabs can actually be opened in any
+   order (unlike a linear checkout), so "done" here just means "earlier
+   in the list than the open tab" — a cosmetic stand-in, not real
+   completion tracking; detected with :has() (no JS/PHP change).
+   Items are a FIXED equal width (unlike the earlier shrink-to-fit
+   version) so each connector segment's math lines up exactly icon-center
+   to icon-center regardless of label length — labels wrap instead of
+   overflowing a fixed box.
+   ================================================================ */
+#mptbm_rent_settings_panel .mptbm_settings .mpTabs.leftTabs {
+    flex-direction: column;
+}
+
+#mptbm_rent_settings_panel .mptbm_settings .mpTabs.leftTabs > .tabLists {
+    --step-icon: 44px;
+    --step-w: 176px;
+    --step-gap: 40px;
+    /* Sticks below the WP admin toolbar (32px desktop / 46px <=782px, see
+       the media query further down) as the page scrolls, so the wizard nav
+       stays reachable instead of scrolling away with the rest of the tab. */
+    position: sticky;
+    top: 32px;
+    z-index: 100;
+    flex-flow: row wrap;
+    justify-content: center;
+    align-items: flex-start;
+    gap: 18px var(--step-gap);
+    min-width: 0;
+    max-width: none;
+    width: 100%;
+    padding: 32px 32px 24px;
+    background: var(--mp-white);
+    border-bottom: 1px solid var(--mp-border);
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.04);
+}
+
+#mptbm_rent_settings_panel .mptbm_settings .mpTabs.leftTabs > .tabLists [data-tabs-target] {
+    /* position:relative (no z-index here) so this item's ::before connector
+       and > i icon are stacked within .tabLists's own context instead of
+       each item getting its OWN isolated stacking context — otherwise a
+       later step's connector (which reaches backward into the previous
+       step's space) paints on top of that earlier step's icon, since later
+       DOM siblings win ties between same-z-index stacking contexts. */
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 6px;
+    flex: 0 0 var(--step-w);
+    width: var(--step-w);
+    padding: 0;
+    text-align: center;
+    border-left: none;
+    color: var(--mp-text-500);
+    transition: var(--mp-transition);
+}
+
+/* Connector: spans from the PREVIOUS icon's center to THIS icon's center
+   (half of this item's width + the gap + half of the previous item's
+   width — reliable now that every item is the same fixed --step-w). */
+#mptbm_rent_settings_panel .mptbm_settings .mpTabs.leftTabs > .tabLists [data-tabs-target]:not(:first-child)::before {
+    content: '';
+    position: absolute;
+    top: calc(var(--step-icon) / 2 - 1px);
+    left: calc(-1 * (var(--step-gap) + var(--step-w) / 2));
+    right: 50%;
+    height: 2px;
+    background: var(--mp-border);
+    z-index: 0;
+    transition: background 0.3s ease;
+}
+
+#mptbm_rent_settings_panel .mptbm_settings .mpTabs.leftTabs > .tabLists [data-tabs-target]::after {
+    content: none;
+}
+
+#mptbm_rent_settings_panel .mptbm_settings .mpTabs.leftTabs > .tabLists [data-tabs-target] > i {
+    position: relative;
+    z-index: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: var(--step-icon);
+    height: var(--step-icon);
+    min-width: var(--step-icon);
+    border-radius: 50%;
+    background: var(--mp-bg-muted);
+    color: var(--mp-text-400);
+    font-size: 16px;
+    border: none;
+    box-shadow: none;
+    transition: var(--mp-transition);
+}
+
+#mptbm_rent_settings_panel .mptbm_settings .mpTabs.leftTabs > .tabLists [data-tabs-target] .menu-text {
+    margin: 0;
+    font-size: 13px;
+    font-weight: 600;
+    line-height: 1.3;
+    color: inherit;
+    white-space: normal;
+    transition: color 0.2s ease;
+}
+
+#mptbm_rent_settings_panel .mptbm_settings .mpTabs.leftTabs > .tabLists [data-tabs-target]:hover {
+    background: transparent;
+    border-left: none;
+    color: var(--mp-text-800);
+}
+
+#mptbm_rent_settings_panel .mptbm_settings .mpTabs.leftTabs > .tabLists [data-tabs-target]:hover > i {
+    color: var(--mp-primary);
+}
+
+/* --- State: DONE (any step before the one that's open) --- */
+#mptbm_rent_settings_panel .mptbm_settings .mpTabs.leftTabs > .tabLists [data-tabs-target]:has(~ [data-tabs-target].active) {
+    color: var(--mp-text-900);
+}
+
+#mptbm_rent_settings_panel .mptbm_settings .mpTabs.leftTabs > .tabLists [data-tabs-target]:has(~ [data-tabs-target].active) > i {
+    background: var(--mp-success);
+    color: var(--mp-white);
+}
+
+/* Swap the section icon for a checkmark once a step is done — same trick
+   FA itself uses (glyph via ::before); \f00c is FA5 solid's check glyph,
+   stable across FA versions. */
+#mptbm_rent_settings_panel .mptbm_settings .mpTabs.leftTabs > .tabLists [data-tabs-target]:has(~ [data-tabs-target].active) > i.fas::before {
+    content: '\f00c';
+}
+
+/* The connector INTO a done step is green; a step is only "reached" by
+   a green line if the step it leads FROM is itself done or current —
+   i.e. skip coloring the segment between an upcoming step and the next
+   (still-upcoming) one. */
+#mptbm_rent_settings_panel .mptbm_settings .mpTabs.leftTabs > .tabLists [data-tabs-target]:has(~ [data-tabs-target].active)::before {
+    background: var(--mp-success);
+}
+
+/* --- State: CURRENT (the open tab) --- */
+#mptbm_rent_settings_panel .mptbm_settings .mpTabs.leftTabs > .tabLists [data-tabs-target].active {
+    background: transparent;
+    border-left: none;
+    color: var(--mp-text-900);
+}
+
+#mptbm_rent_settings_panel .mptbm_settings .mpTabs.leftTabs > .tabLists [data-tabs-target].active > i {
+    background: var(--mp-primary);
+    color: var(--mp-white);
+}
+
+#mptbm_rent_settings_panel .mptbm_settings .mpTabs.leftTabs > .tabLists [data-tabs-target].active::before {
+    background: var(--mp-primary);
+}
+
+@media screen and (max-width: 782px) {
+    #mptbm_rent_settings_panel .mptbm_settings .mpTabs.leftTabs > .tabLists {
+        --step-gap: 24px;
+        --step-w: 100px;
+        top: 46px; /* WP admin toolbar grows to 46px at this breakpoint */
+        flex-wrap: nowrap;
+        justify-content: flex-start;
+        overflow-x: auto;
+        padding: 20px 20px 16px;
+    }
+
+    #mptbm_rent_settings_panel .mptbm_settings .mpTabs.leftTabs > .tabLists [data-tabs-target] {
+        flex: 0 0 auto;
+        width: var(--step-w);
+    }
+
+    #mptbm_rent_settings_panel .mptbm_settings .mpTabs.leftTabs > .tabLists [data-tabs-target] .menu-text {
+        white-space: normal;
+    }
+}
+
+/* ================================================================
    SECTION 6: SCROLLABLE CONTENT AREA
    ================================================================ */
 .mptbm_scroll_content {
@@ -579,15 +768,33 @@
     border: 1px solid var(--mp-border);
     border-radius: var(--mp-r-lg);
     overflow: hidden;
-    margin-top: 16px;
-    box-shadow: var(--mp-shadow-sm);
+    margin-top: 0px;
+    box-shadow: none;
     transition: box-shadow 0.2s ease;
 }
 .mptbm_rent_editor_wrapper:hover {
-    box-shadow: var(--mp-shadow-md);
+    box-shadow: none;
 }
 
 .mptbm_rent_editor_wrapper:first-child { margin-top: 0; }
+
+/* mp_style.css (loaded globally on every wp-admin page) has `div.mpStyle {
+   margin: 0; padding: 0; }` - higher specificity (element+class) than the
+   plain `.mptbm_rent_editor_wrapper` class rule above, so on the one wrapper
+   that also carries .mpStyle (Vehicle Features, which needs it for its
+   icon/image picker widget), it silently zeroed out margin-top, leaving that
+   section flush against the one above it with no gap. Restore it here with
+   matching specificity. */
+.mptbm_rent_editor_wrapper.mpStyle { margin-top: 0px; }
+.mptbm_rent_editor_wrapper.mpStyle:first-child { margin-top: 0; }
+
+.mptbm_rent_editor_wrapper.mpStyle.vehicle-feature {
+    margin-top: 15px;
+}
+
+.mptbm_rent_editor_wrapper.tax-configuration {
+    margin-top: 10px;
+}
 
 /* Card Header */
 .mptbm_rent_editor_header {
@@ -608,12 +815,57 @@
     color: var(--mp-text-800);
 }
 
+/* Current-selection badge on the right of a header — e.g. the active
+   pricing model, updated live by JS as the tab selection changes. */
+.mptbm_pricing_model_badge {
+    display: inline-flex;
+    align-items: center;
+    flex-shrink: 0;
+    margin-left: 12px;
+    padding: 5px 14px;
+    border-radius: var(--mp-r-full);
+    background: var(--mp-primary-light);
+    color: var(--mp-primary);
+    font-size: 12px;
+    font-weight: 700;
+    white-space: nowrap;
+}
+
 .mptbm_rent_editor_title {
     margin: 0 0 3px;
     font-size: 16px;
     font-weight: 700;
     color: var(--mp-text-800);
     line-height: 1.35;
+}
+
+/* Icon set apart from the title/subtitle text column, so both the title
+   and the subtitle start flush at the same left edge instead of the
+   subtitle sitting a full icon-width to the left of the title above it. */
+.mptbm_rent_editor_title_group {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+}
+.mptbm_rent_editor_title_group span{display: flex !important; }
+.mptbm_rent_editor_icon {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 34px;
+    height: 34px;
+    margin-top: 1px;
+    border-radius: var(--mp-r-md, 10px);
+    background: var(--mp-primary, #4f46e5);
+    font-size: 14px;
+}
+/* ".mptbm_rent_editor_header i" (further up this file) colors any bare
+   icon inside the header purple, for icons that sit directly on the
+   card's light background — it also matches this icon, which needs to
+   be white against its own solid-purple badge fill instead. */
+.mptbm_rent_editor_header .mptbm_rent_editor_icon i {
+    color: #fff;
 }
 
 .mptbm_rent_editor_subtitle,
@@ -662,7 +914,7 @@ p.mptbm_taxi_ex_service_subtitle {
 p.mptbm_taxi_help {
     font-size: 12px;
     color: var(--mp-text-500);
-    margin: 2px 0 8px;
+    margin: 6px 0 8px;
     line-height: 1.5;
     font-weight: 400;
     display: block;
@@ -739,6 +991,29 @@ p.mptbm_taxi_help {
     color: var(--mp-text-400);
     font-style: italic;
 }
+/* wp_editor()'s own textarea (Description, Extra Info) already sits inside
+   WordPress's .wp-editor-wrap chrome (tabs + toolbar + its own border) - the
+   generic textarea styling above would double up the border/radius/padding
+   around it. */
+.mptbm_rent_field_group .wp-editor-wrap textarea {
+    border: none;
+    border-radius: 0;
+    min-height: 180px;
+    padding: 8px 10px;
+}
+/* WordPress core's .wp-switch-editor (the "Visual | Text" tabs, only present
+   once TinyMCE actually loads) carries its own margin-top:15px, on top of
+   our own label/help-text spacing above it - stacking into a much bigger
+   gap than the rest of this compact form uses. */
+.mptbm_rent_field_group .wp-editor-tabs {
+    margin-top: 0;
+}
+.mptbm_rent_field_group .wp-switch-editor {
+    margin-top: 0;
+}
+.mptbm_rent_field_group .wp-editor-wrap textarea:focus {
+    box-shadow: none;
+}
 
 /* Universal Select */
 select.formControl,
@@ -814,6 +1089,86 @@ select.formControl:focus,
     font-size: 12px;
     color: var(--mp-text-500);
     display: block;
+}
+
+/* Date & Advanced tab overrides — these reuse mp_global's generic
+   ".roundSwitch"/"[class*=_themeButton]"/etc. components, which key off
+   "--color_theme" (the site's own accent color, undefined in this
+   context) instead of this app's own "--mp-primary" design tokens. That
+   left the 24-Hours toggle a washed-out color and the "Add New
+   Particular Date" button with a plain black background (an undefined
+   CSS custom property resolves to nothing, so the browser falls back to
+   its own defaults) instead of matching the purple buttons/toggles used
+   everywhere else in this redesign. */
+/* Scoped under #mptbm_rent_settings_panel's own ID: mp_global's competing
+   rules for these same elements tie on plain class-specificity, and on a
+   tie the later-loaded framework file (mp_style.css) wins by source
+   order alone regardless of where in this file the override sits — the
+   ID is what actually guarantees these win, same as the card-title fixes
+   earlier. */
+#mptbm_rent_settings_panel .mptbm_taxi_advanced_card .roundSwitchLabel input:checked + .roundSwitch {
+    background-color: var(--mp-primary) !important;
+}
+#mptbm_rent_settings_panel .mptbm_taxi_advanced_card .mp_add_item {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    background: var(--mp-primary) !important;
+    color: var(--mp-white) !important;
+    border: none;
+    padding: 9px 18px;
+    border-radius: var(--mp-r-md);
+    font-weight: 600;
+    font-size: 13px;
+    cursor: pointer;
+    transition: var(--mp-transition);
+    box-shadow: 0 2px 6px rgba(var(--mp-primary-rgb), 0.25);
+}
+#mptbm_rent_settings_panel .mptbm_taxi_advanced_card .mp_add_item span { color: inherit !important; }
+#mptbm_rent_settings_panel .mptbm_taxi_advanced_card .mp_add_item:hover {
+    background: var(--mp-primary-dark) !important;
+    transform: translateY(-1px);
+    box-shadow: 0 4px 10px rgba(var(--mp-primary-rgb), 0.3);
+}
+/* Per-row remove/drag buttons for each particular date — "_whiteButton_xs"
+   and "_mpBtn_themeButton_xs" have no CSS definitions anywhere in this
+   plugin at all, so they were rendering as bare unstyled buttons. */
+.mptbm_taxi_advanced_card .mp_remove_area .buttonGroup > * {
+    width: 34px;
+    height: 34px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: var(--mp-r-md, 10px);
+    background: var(--mp-bg-muted);
+    border: 1px solid var(--mp-border-light);
+    color: var(--mp-text-500);
+    cursor: pointer;
+    transition: var(--mp-transition);
+}
+.mptbm_taxi_advanced_card .mp_remove_area .mp_sortable_button { cursor: grab; }
+.mptbm_taxi_advanced_card .mp_remove_area .mp_sortable_button:hover {
+    background: var(--mp-primary-light);
+    border-color: var(--mp-primary-border);
+    color: var(--mp-primary);
+}
+.mptbm_taxi_advanced_card .mp_remove_area .mp_item_remove:hover {
+    background: var(--mp-danger-light);
+    border-color: var(--mp-danger-border);
+    color: var(--mp-danger);
+}
+/* mp_global's "[class*=whiteButton] span" explicitly colors this icon's
+   own <span> green (var(--color_theme)), which beats simply setting
+   color on the button — inheritance always loses to an explicit rule on
+   the element itself, regardless of the inherited rule's specificity. */
+.mptbm_taxi_advanced_card .mp_remove_area .buttonGroup > * span {
+    color: inherit !important;
+}
+.mptbm_taxi_advanced_card .mp_remove_area {
+    background: var(--mp-white) !important;
+    border: 1px solid var(--mp-border-light);
+    border-radius: var(--mp-r-md, 10px);
+    padding: 10px !important;
 }
 
 /* ================================================================
@@ -1183,10 +1538,65 @@ input:checked + .mptbm_taxi_slider::before { transform: translateX(22px); }
     padding: 4px 0;
     border-radius: var(--mp-r-md);
 }
-.mptbm_taxi_pricing_field_free {
-    padding: 16px;
-    border: 1.5px solid var(--mp-border);
-    border-radius: var(--mp-r-lg);
+
+/* Generic PRO lock — blurred + disabled content behind an overlay when the
+   Pro plugin isn't active. Reused by the Operation Area picker and the Base
+   Location Charges body; inputs inside should also get the real `disabled`
+   attribute server-side so they can never post a value. */
+.mptbm_pro_lock {
+    position: relative;
+}
+.mptbm_pro_lock.is-locked {
+    cursor: pointer;
+}
+.mptbm_pro_lock.is-locked .mptbm_pro_lock_content {
+    filter: blur(2.5px);
+    opacity: .55;
+    pointer-events: none;
+    user-select: none;
+}
+.mptbm_pro_lock_overlay {
+    position: absolute;
+    inset: 0;
+    z-index: 2;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 20px;
+    text-align: center;
+}
+.mptbm_pro_lock_badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 14px;
+    border-radius: var(--mp-r-full);
+    background: var(--mp-primary);
+    color: var(--mp-white);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+    box-shadow: var(--mp-shadow-md);
+}
+.mptbm_pro_lock_badge .dashicons {
+    width: 13px;
+    height: 13px;
+    font-size: 13px;
+}
+.mptbm_pro_lock_overlay p {
+    max-width: 380px;
+    margin: 0;
+    color: var(--mp-text-700);
+    font-size: 12.5px;
+    font-weight: 600;
+    line-height: 1.5;
+    background: var(--mp-white);
+    padding: 6px 12px;
+    border-radius: var(--mp-r-md);
+    border: 1px solid var(--mp-border);
 }
 
 /* Info Alert */
@@ -1493,17 +1903,14 @@ input:checked + .mptbm_taxi_slider::before { transform: translateX(22px); }
 .mptbm_pricing_rules_grid {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-    gap: 0;
+    gap: 12px;
 }
 .mptbm_pricing_rules_card {
     background: var(--mp-white);
-    border-bottom: 1px solid var(--mp-border-light);
-    padding: 20px;
-    transition: 0.2s ease;
-    position: relative;
+    border: 1px solid var(--mp-border);
+    border-radius: var(--mp-r-lg);
+    padding: 18px 20px;
 }
-.mptbm_pricing_rules_card:last-child { border-bottom: none; }
-.mptbm_pricing_rules_card:hover { background: var(--mp-bg-muted); }
 .mptbm_pricing_rules_card h4 {
     margin: 0 0 6px;
     font-size: 14px;
@@ -1515,20 +1922,20 @@ input:checked + .mptbm_taxi_slider::before { transform: translateX(22px); }
     flex-wrap: wrap;
 }
 .mptbm_pricing_rules_card h4::after {
-    content: "✓ ACTIVE";
+    content: "Active";
     display: inline-flex;
     align-items: center;
-    padding: 2px 10px;
+    padding: 2px 9px;
     border-radius: var(--mp-r-full);
-    background: var(--mp-success);
-    color: var(--mp-white);
+    background: var(--mp-success-light);
+    color: var(--mp-success);
     font-size: 10px;
     font-weight: 700;
-    letter-spacing: 0.04em;
+    letter-spacing: 0.03em;
     flex-shrink: 0;
 }
 .mptbm_pricing_rules_card p {
-    margin: 0 0 10px;
+    margin: 0 0 12px;
     font-size: 13px;
     color: var(--mp-text-500);
     line-height: 1.5;
@@ -1536,13 +1943,14 @@ input:checked + .mptbm_taxi_slider::before { transform: translateX(22px); }
 .mptbm_pricing_rules_formula {
     background: var(--mp-bg-muted);
     padding: 10px 14px;
-    border-radius: var(--mp-r-sm);
-    font-size: 13px;
-    font-weight: 600;
+    border: 1px solid var(--mp-border);
+    border-radius: var(--mp-r-md);
+    font-family: var(--mp-mono);
+    font-size: 12.5px;
+    font-weight: 500;
     color: var(--mp-text-700);
-    border-left: 3px solid var(--mp-primary);
-    line-height: 1.6;
-    white-space: pre-wrap;
+    line-height: 1.2;
+    white-space: normal;
 }
 
 /* ================================================================
@@ -1581,43 +1989,59 @@ select#mptbm_extra_services_id:focus {
     box-shadow: var(--mp-shadow-focus);
 }
 
+/* border-collapse:separate + border-spacing gives each <tr> visible gaps,
+   so a background+shadow on its <td>s reads as a floating rounded card —
+   the same "soft row" language as the redesigned Vehicle Features list —
+   without changing the underlying <table>/<tr> markup that the add-row/
+   sortable/remove-row JS targets directly. */
 .mptbm_taxi_ex_service_table {
     width: 100%;
-    border-collapse: collapse;
-    background: var(--mp-white);
-    border: 1px solid var(--mp-border);
-    border-radius: var(--mp-r-md);
-    overflow: hidden;
+    border-collapse: separate;
+    border-spacing: 0 10px;
+    background: transparent;
     font-size: 13px;
 }
 .mptbm_taxi_ex_service_table th {
     text-align: left;
-    padding: 12px 14px;
-    border-bottom: 2px solid var(--mp-border);
-    color: var(--mp-text-600);
-    font-size: 12px;
+    padding: 0 14px 10px;
+    border-bottom: 1px solid var(--mp-border-light);
+    color: var(--mp-text-400);
+    font-size: 11px;
     font-weight: 700;
     text-transform: uppercase;
-    letter-spacing: 0.05em;
-    background: var(--mp-bg-muted);
+    letter-spacing: 0.06em;
+    background: transparent;
 }
 .mptbm_taxi_ex_service_table td {
-    padding: 10px 12px;
-    border-bottom: 1px solid var(--mp-border-light);
+    padding: 12px;
     vertical-align: middle;
+    background: var(--mp-white);
+    border-top: 1px solid var(--mp-border-light);
+    border-bottom: 1px solid var(--mp-border-light);
+    transition: var(--mp-transition);
 }
-.mptbm_taxi_ex_service_table tr:last-child td { border-bottom: none; }
-.mptbm_taxi_ex_service_table tr:hover td { background: var(--mp-bg); }
+.mptbm_taxi_ex_service_table td:first-child {
+    border-left: 1px solid var(--mp-border-light);
+    border-radius: var(--mp-r-lg, 14px) 0 0 var(--mp-r-lg, 14px);
+}
+.mptbm_taxi_ex_service_table td:last-child {
+    border-right: 1px solid var(--mp-border-light);
+    border-radius: 0 var(--mp-r-lg, 14px) var(--mp-r-lg, 14px) 0;
+}
+.mptbm_taxi_ex_service_table tr:hover td {
+    border-color: var(--mp-primary-border, var(--mp-border-dark));
+    box-shadow: 0 4px 12px rgba(15, 23, 42, .06);
+}
 
 /* Table Inputs */
 .mptbm_taxi_ex_service_input,
 .mptbm_taxi_ex_service_select {
     width: 100%;
-    height: 38px;
+    height: 40px;
     padding: 0 12px;
-    border: 1.5px solid var(--mp-border);
-    border-radius: var(--mp-r-sm);
-    background: var(--mp-white);
+    border: 1.5px solid var(--mp-border-light);
+    border-radius: var(--mp-r-md, 10px);
+    background: var(--mp-bg-muted);
     color: var(--mp-text-800);
     font-size: 13px;
     font-family: var(--mp-font);
@@ -1627,12 +2051,18 @@ select#mptbm_extra_services_id:focus {
     display: block;
 }
 input.mptbm_taxi_ex_service_input {
-    height: 38px;
+    height: 40px;
     padding: 0 12px;
     font-size: 13px;
+    border-radius: 10px;
+}
+.mptbm_taxi_ex_service_input:hover,
+.mptbm_taxi_ex_service_select:hover {
+    border-color: var(--mp-border);
 }
 .mptbm_taxi_ex_service_input:focus,
 .mptbm_taxi_ex_service_select:focus {
+    background: var(--mp-white);
     border-color: var(--mp-primary);
     box-shadow: var(--mp-shadow-focus);
 }
@@ -1640,11 +2070,12 @@ input.mptbm_taxi_ex_service_input {
 .mptbm_center { text-align: left !important; }
 
 textarea.mptbm_taxi_ex_service_select {
-    height: 38px;
+    height: 40px;
     resize: none;
     overflow: hidden;
     white-space: nowrap;
-    line-height: 22px;
+    text-overflow: ellipsis;
+    line-height: 23px;
     padding-top: 8px;
 }
 
@@ -1657,7 +2088,7 @@ select.mptbm_taxi_ex_service_select {
     padding-right: 28px;
     cursor: pointer;
 }
-select.mptbm_taxi_ex_service_select.mideum { max-width: 160px; }
+select.mptbm_taxi_ex_service_select.mideum { max-width: 160px; border-radius: 10px; }
 
 /* Table Action Buttons */
 .mptbm_taxi_ex_service_actions {
@@ -1668,17 +2099,17 @@ select.mptbm_taxi_ex_service_select.mideum { max-width: 160px; }
 }
 .mptbm_taxi_ex_service_btn_del,
 .mptbm_taxi_ex_service_btn_drag {
-    width: 32px;
-    height: 32px;
+    width: 34px;
+    height: 34px;
     display: flex;
     align-items: center;
     justify-content: center;
-    border-radius: var(--mp-r-sm);
+    border-radius: var(--mp-r-md, 10px);
     cursor: pointer;
     transition: var(--mp-transition);
     font-size: 14px;
-    background: var(--mp-white);
-    border: 1px solid var(--mp-border);
+    background: var(--mp-bg-muted);
+    border: 1px solid var(--mp-border-light);
     line-height: 1;
 }
 .mptbm_taxi_ex_service_btn_del:hover {
@@ -1687,7 +2118,41 @@ select.mptbm_taxi_ex_service_select.mideum { max-width: 160px; }
     color: var(--mp-danger);
 }
 .mptbm_taxi_ex_service_btn_drag { cursor: grab; }
-.mptbm_taxi_ex_service_btn_drag:hover { background: var(--mp-bg-muted); }
+.mptbm_taxi_ex_service_btn_drag:hover { background: var(--mp-primary-light); border-color: var(--mp-primary-border); }
+
+/* Icon thumbnail: match the Vehicle Features redesign — soft tinted
+   square instead of the plain box with a border-color:var(--color_theme)
+   bleed-through (rendering as an odd green outline), and the
+   always-visible remove badge (opacity:1 forced further up the cascade)
+   restyled from a bare solid-red circle to a small white badge. */
+.mptbm_taxi_ex_service_table .mp_add_icon_image_area {
+    max-width: 64px;
+    border: none;
+    border-radius: var(--mp-r-md, 10px);
+    background: var(--mp-primary-light, #eef1ff);
+}
+.mptbm_taxi_ex_service_table .mp_icon_item {
+    border-radius: var(--mp-r-md, 10px);
+    background: transparent;
+}
+.mptbm_taxi_ex_service_table .mp_icon_item .allCenter {
+    color: var(--mp-primary, #4f46e5);
+    font-size: 18px;
+}
+.mptbm_taxi_ex_service_table .mp_image_item,
+.mptbm_taxi_ex_service_table .mp_image_add { display: none !important; }
+.mptbm_taxi_ex_service_table .mp_add_icon_image_area .mp_remove_icon {
+    background: var(--mp-white);
+    color: var(--mp-text-400, #94a3b8);
+    box-shadow: 0 1px 4px rgba(15, 23, 42, .18);
+    border: 1px solid var(--mp-border-light);
+    transition: var(--mp-transition);
+}
+.mptbm_taxi_ex_service_table .mp_add_icon_image_area .mp_remove_icon:hover {
+    background: var(--mp-danger-light);
+    color: var(--mp-danger);
+    border-color: var(--mp-danger-border);
+}
 
 /* Footer */
 .mptbm_taxi_ex_service_footer {
@@ -1699,25 +2164,26 @@ select.mptbm_taxi_ex_service_select.mideum { max-width: 160px; }
 }
 
 .mptbm_taxi_ex_service_add_btn {
-    background: var(--mp-primary);
-    color: var(--mp-white);
-    border: none;
-    padding: 9px 18px;
-    border-radius: var(--mp-r-md);
+    background: transparent;
+    color: var(--mp-text-700);
+    border: 1px solid var(--mp-border);
+    padding: 7px 12px;
+    border-radius: 6px;
     font-weight: 600;
     cursor: pointer;
     display: inline-flex;
     align-items: center;
-    gap: 6px;
-    font-size: 13px;
-    transition: var(--mp-transition);
-    box-shadow: 0 2px 6px rgba(var(--mp-primary-rgb), 0.25);
+    gap: 4px;
+    font-size: 12px;
+    transition: background 0.15s ease, border-color 0.15s ease;
+    box-shadow: none;
 }
 .mptbm_taxi_ex_service_add_btn:hover {
-    background: var(--mp-primary-dark);
-    color: var(--mp-white);
-    transform: translateY(-1px);
-    box-shadow: 0 4px 10px rgba(var(--mp-primary-rgb), 0.3);
+    background: #f8fafc;
+    color: var(--mp-text-800);
+    border-color: var(--mp-border-dark);
+    transform: none;
+    box-shadow: none;
 }
 
 /* ================================================================
@@ -1731,54 +2197,94 @@ select.mptbm_taxi_ex_service_select.mideum { max-width: 160px; }
 
 .mptbm_taxi_feature_labels {
     display: grid;
-    grid-template-columns: 80px 1fr 100px;
+    grid-template-columns: 64px 1fr 84px;
     gap: 16px;
-    margin-bottom: 10px;
+    margin-bottom: 12px;
     font-size: 11px;
     font-weight: 700;
     color: var(--mp-text-400);
     text-transform: uppercase;
     letter-spacing: 0.06em;
-    padding: 0 6px;
+    padding: 0 4px 10px;
+    border-bottom: 1px solid var(--mp-border-light);
     text-align: left;
 }
 
 .mptbm_taxi_feature_row {
     display: grid;
-    grid-template-columns: 80px 1fr 100px;
+    grid-template-columns: 64px 1fr 84px;
     gap: 16px;
     align-items: center;
     margin-bottom: 10px;
-    padding: 8px;
-    background: var(--mp-bg-muted);
-    border-radius: var(--mp-r-md);
+    padding: 10px;
+    background: var(--mp-white);
+    border-radius: var(--mp-r-lg, 14px);
     border: 1px solid var(--mp-border-light);
     transition: var(--mp-transition);
 }
 .mptbm_taxi_feature_row:hover {
-    border-color: var(--mp-border-dark);
-    background: var(--mp-white);
-    box-shadow: var(--mp-shadow-xs);
+    border-color: var(--mp-primary-border, var(--mp-border-dark));
+    box-shadow: 0 4px 12px rgba(15, 23, 42, .06);
 }
-.mptbm_taxi_feature_row .mp_add_icon_image_area { border-color: var(--mp-border); max-width: 80px; }
+
+/* Icon thumbnail: a soft tinted square instead of a plain gray/bordered
+   box, and the always-visible remove badge (opacity:1 forced by
+   admin_style.css, further up the cascade) restyled from a bare solid-red
+   circle into a small white badge with a soft shadow, turning red only
+   on its own hover. */
+.mptbm_taxi_feature_row .mp_add_icon_image_area {
+    max-width: 64px;
+    border: none;
+    border-radius: var(--mp-r-md, 10px);
+    background: var(--mp-primary-light, #eef1ff);
+}
+.mptbm_taxi_feature_row .mp_icon_item {
+    border-radius: var(--mp-r-md, 10px);
+    background: transparent;
+}
+.mptbm_taxi_feature_row .mp_icon_item .allCenter {
+    color: var(--mp-primary, #4f46e5);
+    font-size: 18px;
+}
 .mptbm_taxi_feature_row .mp_image_item,
 .mptbm_taxi_feature_row .mp_image_add { display: none !important; }
+/* Extra ".mp_add_icon_image_area" qualifier (not just ".mptbm_taxi_feature_row
+   .mp_remove_icon") to outrank mp_global/mp_style.css's own same-specificity
+   ".mpStyle .mp_remove_icon" rule — that file is enqueued after this one, so
+   on a specificity tie its background-color: var(--color_danger) (solid red)
+   would otherwise win by source order alone. */
+.mptbm_taxi_feature_row .mp_add_icon_image_area .mp_remove_icon {
+    background: var(--mp-white);
+    color: var(--mp-text-400, #94a3b8);
+    box-shadow: 0 1px 4px rgba(15, 23, 42, .18);
+    border: 1px solid var(--mp-border-light);
+    transition: var(--mp-transition);
+}
+.mptbm_taxi_feature_row .mp_add_icon_image_area .mp_remove_icon:hover {
+    background: var(--mp-danger-light);
+    color: var(--mp-danger);
+    border-color: var(--mp-danger-border);
+}
 
 input.mptbm_taxi_feature_input {
     width: 100%;
-    height: 38px;
-    padding: 0 12px;
-    border: 1.5px solid var(--mp-border);
-    border-radius: var(--mp-r-sm);
-    font-size: 13px;
+    height: 40px;
+    padding: 0 14px;
+    border: 1.5px solid var(--mp-border-light);
+    border-radius: var(--mp-r-md, 10px);
+    font-size: 13.5px;
     font-family: var(--mp-font);
     box-sizing: border-box;
     color: var(--mp-text-800);
-    background: var(--mp-white);
+    background: var(--mp-bg-muted);
     outline: none;
     transition: var(--mp-transition);
 }
+input.mptbm_taxi_feature_input:hover {
+    border-color: var(--mp-border);
+}
 input.mptbm_taxi_feature_input:focus {
+    background: var(--mp-white);
     border-color: var(--mp-primary);
     box-shadow: var(--mp-shadow-focus);
 }
@@ -1786,11 +2292,11 @@ input.mptbm_taxi_feature_input:focus {
 .mptbm_taxi_feature_actions { display: flex; gap: 6px; }
 
 .mptbm_taxi_feature_btn_icon {
-    width: 32px;
-    height: 32px;
-    border: 1px solid var(--mp-border);
-    border-radius: var(--mp-r-sm);
-    background: var(--mp-white);
+    width: 34px;
+    height: 34px;
+    border: 1px solid var(--mp-border-light);
+    border-radius: var(--mp-r-md, 10px);
+    background: var(--mp-bg-muted);
     cursor: pointer;
     display: flex;
     align-items: center;
@@ -1807,11 +2313,10 @@ input.mptbm_taxi_feature_input:focus {
 .mptbm_taxi_feature_btn_move:hover { background: var(--mp-primary-light); border-color: var(--mp-primary-border); }
 
 .mptbm_taxi_feature_footer {
-    padding: 10px 0 4px;
+    padding: 12px 0 4px;
     display: flex;
     justify-content: flex-end;
-    border-top: 1px solid var(--mp-border-light);
-    margin-top: 8px;
+    margin-top: 4px;
 }
 
 .mptbm_taxi_feature_add_btn {
@@ -1845,6 +2350,14 @@ input.mptbm_taxi_feature_input:focus {
     flex-direction: column;
     gap: 10px;
     width: 100%;
+}
+/* The nested "Vehicle Availability" wrapper (taxi_availability_status()) is the
+   last item in this flex column. As a .mptbm_rent_editor_wrapper it normally
+   carries its own margin-top:16px, which stacked on top of the 10px flex gap
+   above - 26px there vs. only 10px between the other setting cards. Zero it
+   out so the flex gap is the only spacing, consistent with its siblings. */
+.mptbm_taxi_inventory_settings_card > .mptbm_rent_editor_wrapper {
+    margin-top: 0;
 }
 
 .mptbm_taxi_inventory_styled_input {
@@ -2001,25 +2514,59 @@ input.mptbm_taxi_feature_input:focus {
     color: var(--mp-text-400);
     margin-bottom: 6px;
 }
+.mptbm_taxi_pricing_selection_group label #mptbm_single_mul_operation_area {
+    margin-left: 4px;
+    color: var(--mp-text-500);
+    font-weight: 600;
+}
 
-/* Empty Operation Area Warning */
+/* Empty Operation Area Notice */
 .mptbm_empty_selected_area {
-    position: relative;
-    background: var(--mp-warning-light);
-    border: 1px solid var(--mp-warning-border);
-    border-left: 4px solid var(--mp-warning);
-    padding: 10px 14px;
-    border-radius: var(--mp-r-md);
-    margin-top: 8px;
-    box-shadow: 0 2px 8px rgba(245,158,11,0.1);
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    margin-top: 10px;
+    padding: 14px 16px;
+    color: var(--mp-text-700, #334155);
+    background: #f8fafc;
+    border: 1px solid var(--mp-border, #e2e8f0);
+    border-radius: var(--mp-r-lg, 14px);
+}
+.mptbm_empty_selected_area_icon {
+    display: inline-flex;
+    flex: 0 0 36px;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    height: 36px;
+    color: #635bff;
+    background: #eeecff;
+    border-radius: 10px;
+}
+.mptbm_empty_selected_area_icon .dashicons {
+    width: 20px;
+    height: 20px;
+    font-size: 20px;
+    line-height: 20px;
+}
+.mptbm_empty_selected_area_content {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: 3px;
+}
+.mptbm_empty_selected_area_content strong {
+    color: var(--mp-text-900, #0f172a);
+    font-size: 13px;
+    line-height: 1.5;
+    font-weight: 700;
 }
 .mptbm_empty_selected_area_text {
-    display: inline;
+    display: block;
     font-size: 13px;
-    line-height: 1.7;
-    color: #92400e;
-    font-weight: 500;
-    white-space: pre-wrap;
+    line-height: 1.55;
+    color: var(--mp-text-500, #64748b);
+    font-weight: 400;
 }
 .mptbm_required { color: var(--mp-danger); font-size: 16px; font-weight: 700; vertical-align: middle; }
 
@@ -2030,21 +2577,21 @@ input.mptbm_taxi_feature_input:focus {
     align-items: center;
     gap: 8px;
     padding: 10px 20px;
-    background: linear-gradient(135deg, #0073aa, #00a0d2);
+    background: var(--mp-primary);
     color: var(--mp-white) !important;
     font-size: 14px;
     font-weight: 600;
     text-decoration: none;
     border-radius: var(--mp-r-md);
-    box-shadow: 0 3px 10px rgba(0,115,170,0.25);
+    box-shadow: 0 3px 10px rgba(var(--mp-primary-rgb), 0.25);
     transition: var(--mp-transition);
     border: none;
     cursor: pointer;
 }
 .mptbm_create_area_btn:hover {
-    background: linear-gradient(135deg, #005f8d, #008ec2);
+    background: var(--mp-primary-dark);
     transform: translateY(-2px);
-    box-shadow: 0 6px 16px rgba(0,115,170,0.3);
+    box-shadow: 0 6px 16px rgba(var(--mp-primary-rgb), 0.3);
     color: var(--mp-white);
 }
 
@@ -2240,85 +2787,140 @@ input.mptbm_taxi_feature_input:focus {
     margin: 16px;
 }
 .mptbm_shortcode_header:hover {
-    background: var(--mp-primary-light);
-    border-color: var(--mp-primary-border);
+    border-color: var(--mp-border-dark);
 }
 .mptbm_shortcode_header_left { display: flex; align-items: center; }
 .mptbm_shortcode_header_text h3 {
-    margin: 0;
-    font-size: 14px;
-    font-weight: 700;
-    color: var(--mp-text-800);
+    margin: 0 !important;
+    font-family: var(--mp-font) !important;
+    font-size: 13px !important;
+    font-weight: 700 !important;
+    line-height: 1.4 !important;
+    color: var(--mp-text-800) !important;
 }
 .mptbm_shortcode_header_text p {
-    margin: 2px 0 0;
-    font-size: 12px;
-    color: var(--mp-text-500);
+    margin: 2px 0 0 !important;
+    font-size: 12px !important;
+    color: var(--mp-text-500) !important;
 }
-.mptbm_shortcode_toggle { color: var(--mp-text-400); }
-.mptbm_shortcode_toggle div { transition: transform 0.3s ease; }
+.mptbm_shortcode_toggle { color: var(--mp-text-400); font-size: 12px; }
+.mptbm_shortcode_toggle div { transition: transform 0.2s ease; }
 .mptbm_shortcode_toggle div.mptbm_rotate { transform: rotate(180deg); }
 
+/* Flat, minimal body — no card shadow, one neutral palette throughout
+   instead of the previous blue-tinted boxes (#e6f1fe/#d1e5ff/#2563eb). */
 .mptbm_shortcode_body {
+    box-sizing: border-box;
+    max-width: 100%;
     background: var(--mp-white);
     border: 1px solid var(--mp-border);
     border-radius: var(--mp-r-md);
-    padding: 20px;
-    margin: 16px;
-    box-shadow: var(--mp-shadow-sm);
+    padding: 22px 20px;
+    margin: 0 16px 16px;
+    overflow: hidden;
 }
+
+.mptbm_shortcode_section { margin-bottom: 22px; }
+.mptbm_shortcode_section:last-child { margin-bottom: 0; }
+
 .mptbm_shortcode_sub_title {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    font-size: 13px;
-    font-weight: 700;
-    color: #002b5e;
-    margin: 0 0 10px;
+    display: flex !important;
+    align-items: center !important;
+    gap: 8px !important;
+    font-family: var(--mp-font) !important;
+    font-size: 11px !important;
+    font-weight: 700 !important;
+    letter-spacing: 0.04em !important;
+    text-transform: uppercase !important;
+    color: var(--mp-text-700) !important;
+    margin: 0 0 12px !important;
+    padding: 0 !important;
+    line-height: 1.4 !important;
 }
-.mptbm_shortcode_inline_icon { width: 16px; height: 16px; }
+.mptbm_shortcode_icon_badge {
+    display: inline-flex;
+    flex: 0 0 auto;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+}
+.mptbm_shortcode_icon_badge--info {
+    color: var(--mp-primary);
+    background: var(--mp-primary-light);
+}
+.mptbm_shortcode_icon_badge--warning {
+    color: var(--mp-warning);
+    background: var(--mp-warning-light);
+}
+.mptbm_shortcode_inline_icon {
+    width: 11px;
+    height: 11px;
+    color: currentColor;
+    stroke: currentColor;
+}
 
 .mptbm_shortcode_code_box {
-    background: var(--mp-white);
-    border: 1px solid #d1e5ff;
+    box-sizing: border-box;
+    max-width: 100%;
+    background: var(--mp-bg-muted);
+    border: 1px solid var(--mp-border);
     border-radius: var(--mp-r-sm);
-    padding: 12px;
-    text-align: center;
+    padding: 12px 14px;
+    text-align: left;
     overflow-x: auto;
 }
 .mptbm_shortcode_code_box code {
     font-family: var(--mp-mono);
-    font-size: 13px;
-    color: #2563eb;
+    font-size: 12.5px;
+    color: var(--mp-text-800);
     word-break: break-all;
+    white-space: pre-wrap;
+    line-height: 1.6;
 }
-.mptbm_shortcode_primary_code { background: #e6f1fe; }
-.mptbm_shortcode_divider { height: 1px; background: #d1e5ff; margin: 14px 0; opacity: 0.6; }
+/* One thin rule between the primary shortcode and the rest — spacing for
+   every other gap already comes from .mptbm_shortcode_section's margin. */
+.mptbm_shortcode_divider {
+    height: 1px;
+    margin: 22px 0;
+    background: var(--mp-border-light);
+}
 
 .mptbm_shortcode_grid {
     display: grid;
-    grid-template-columns: 1fr;
-    gap: 6px;
-    margin-bottom: 14px;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px 24px;
 }
 .mptbm_shortcode_param_item {
-    background: var(--mp-white);
-    border: 1px solid #d1e5ff;
-    border-radius: var(--mp-r-sm);
-    padding: 9px 12px;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
     font-size: 12px;
+    color: var(--mp-text-600);
+    overflow-wrap: break-word;
 }
-.mptbm_shortcode_param_item code { font-family: var(--mp-mono); color: #1e40af; }
-
-.mptbm_shortcode_example_wrapper {
-    background: rgba(255,255,255,0.5);
-    border: 1px solid #d1e5ff;
-    padding: 12px;
+.mptbm_shortcode_or {
+    color: var(--mp-text-400);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+}
+.mptbm_shortcode_param_item code {
+    font-family: var(--mp-mono);
+    font-size: 11px;
+    color: var(--mp-text-700);
+    background: var(--mp-bg-muted);
+    border: 1px solid var(--mp-border-light);
+    padding: 3px 8px;
     border-radius: var(--mp-r-sm);
+    word-break: break-word;
 }
-.mptbm_shortcode_example_code { background: #e6f1fe; text-align: left; padding: 12px; }
 
-.mptbm_shortcode_section { margin-bottom: 14px; }
+.mptbm_shortcode_example_wrapper { }
 
 /* ================================================================
    SECTION 22: PRO POPUP & OVERLAY
@@ -2384,45 +2986,6 @@ input.mptbm_taxi_feature_input:focus {
 .buy-pro-btn:hover {
     transform: translateY(-2px);
     box-shadow: 0 8px 20px rgba(249,115,22,0.45);
-}
-
-/* PRO locked overlay on free sections */
-#mptbm_taxi_pricing_field_free {
-    position: relative;
-}
-#mptbm_taxi_pricing_field_free.pro-locked {
-    pointer-events: none;
-    margin-top: 10px;
-}
-#mptbm_taxi_pricing_field_free.pro-locked::before {
-    background: rgba(30,41,59,0.55);
-    content: '';
-    width: 100%;
-    height: 100%;
-    position: absolute;
-    border-radius: var(--mp-r-lg);
-    top: 0; left: 0;
-    z-index: 5;
-    backdrop-filter: blur(1px);
-}
-#mptbm_taxi_pricing_field_free.pro-locked::after {
-    content: "🔒  PRO FEATURE — CLICK TO UPGRADE";
-    position: absolute;
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%);
-    background: rgba(15,23,42,0.9);
-    color: var(--mp-white);
-    padding: 16px 28px;
-    border-radius: var(--mp-r-md);
-    font-weight: 700;
-    font-size: 14px;
-    z-index: 10;
-    cursor: pointer;
-    pointer-events: auto;
-    white-space: nowrap;
-    box-shadow: var(--mp-shadow-lg);
-    letter-spacing: 0.02em;
 }
 
 .mptbm_pro_badge_wrapper .mptbm_rent_editor_header {
@@ -2595,16 +3158,21 @@ input.mptbm_taxi_feature_input:focus {
    ================================================================ */
 .mptbm_distance_tier_pricing_settings_holder,
 .mptbm_taxi_peak_hour_pricing_addon {
-    border: 1.5px solid var(--mp-border);
     border-radius: var(--mp-r-lg);
     overflow: hidden;
-    margin-top: 15px !important;
+    margin-top: 0px !important;
     background: var(--mp-white);
-    box-shadow: var(--mp-shadow-sm);
-    padding: 15px !important;
-    width: calc(100% - 30px) !important;
-
 }
+
+/* Both addons used to render their own .tabsItem[data-tabs] wrapper (built for
+   the left-tab wizard's top-level tabs) despite living nested inside the Pricing
+   tab's own tabsItem, not as a direct child of .tabsContent — mp_style.css's
+   blanket ".tabsContent [data-tabs] { display: none; }" permanently hid them
+   with no way to ever reveal it. Distance_Tier_Settings::distance_tier_pricing_settings()
+   and Taxi_Peak_Hour_Settings::peak_hour_pricing_settings() no longer emit that
+   class/attribute at all (matching how Operation Area pricing already works: a
+   section displayed directly inside the Pricing tab, not dependent on the
+   tab-switcher), so nothing here needs to fight that hiding rule anymore. */
 
 /* Advanced toggle for date type */
 .mptbm_taxi_advanced_toggle select[name="mptbm_date_type"] { width: 250px; }
@@ -2810,8 +3378,10 @@ input.mptbm_taxi_feature_input:focus {
 /* Date/Advanced section holder */
 #mptbm_price_per_hour { margin-top: 12px; }
 
-/* "mpStyle" class used in some wrappers */
-.mptbm_taxi_ex_service_table th,
+/* "mpStyle" class used in some wrappers — ".mptbm_taxi_ex_service_table th"
+   removed from this list: it duplicated (and, being later in the file,
+   silently won over) the header styling declared with the rest of this
+   table's own rules further up. */
 .mpStyle table th {
     background: var(--mp-bg-muted);
     padding: 10px 14px;
@@ -2842,6 +3412,7 @@ input.mptbm_taxi_feature_input:focus {
 /* Base-fare / base-location toggles */
 .mptbm_rent_editor_wrapper[id="mptbm_taxi_base_fare_toggle_container"],
 .mptbm_taxi_toggle_container[id="mptbm_taxi_base_location_toggle_container"] {
+    border: 1px solid #ddd;
     border-left: none;
 }
 /* Extra services container */
@@ -2885,6 +3456,7 @@ input.mptbm_taxi_feature_input:focus {
     grid-template-columns: 1fr 1fr;
     gap: 18px 24px;
 }
+.mptbm_rent_field_full { grid-column: 1 / -1; }
 @media (max-width: 900px) {
     .mptbm_field_grid_2col { grid-template-columns: 1fr; }
 }
@@ -3008,15 +3580,6 @@ input.mptbm_taxi_feature_input:focus {
     color: #f59e0b;
 }
 
-/* ── Pricing rules formula: monospace + pre-wrap ─────────────────
-   Code-like blocks should use a mono font.
-   ---------------------------------------------------------------- */
-.mptbm_pricing_rules_formula {
-    font-family: var(--mp-mono);
-    font-size: 12px;
-    white-space: pre-line;
-}
-
 /* ── Section spacing: between sibling wrappers inside a step ──────
    Give each card a slightly more generous gap than default.
    ---------------------------------------------------------------- */
@@ -3054,7 +3617,6 @@ select.formControl,
     height: 100%;
 }
 
-/* Full-height flex column; padding-top reserves space for info icon */
 .mptbm-oa-card-inner {
     height: 100%;
     box-sizing: border-box;
@@ -3063,77 +3625,6 @@ select.formControl,
     gap: 0;
     position: relative;
     padding: 14px;
-    padding-top: 36px;
-}
-
-/* ── Info icon — top-right corner ────────────────────────────────
-   Hover reveals a dark overlay with extended description.
-   pointer-events on tooltip stays none so label click still works.
-   ---------------------------------------------------------------- */
-.mptbm-oa-info {
-    position: absolute;
-    top: 8px;
-    right: 9px;
-    z-index: 5;
-    line-height: 1;
-}
-.mptbm-oa-info > .dashicons {
-    font-size: 15px !important;
-    width: 15px !important;
-    height: 15px !important;
-    color: var(--mp-text-300);
-    cursor: help;
-    display: block;
-    transition: color 0.2s ease, transform 0.15s ease;
-}
-.mptbm-oa-info:hover > .dashicons {
-    color: var(--mp-primary);
-    transform: scale(1.15);
-}
-
-/* Tooltip overlay — fills the card, stays within overflow:hidden ancestors */
-.mptbm-oa-tooltip {
-    position: absolute;
-    top: 0;
-    right: 0;
-    bottom: 0;
-    left: 0;
-    background: rgba(15, 23, 42, 0.96);
-    border-radius: calc(var(--mp-r-md) - 1px);
-    padding: 12px 14px;
-    opacity: 0;
-    visibility: hidden;
-    transition: opacity 0.22s ease, visibility 0.22s;
-    pointer-events: none;
-    z-index: 4;
-    display: flex;
-    flex-direction: column;
-    gap: 0;
-    overflow: hidden;
-}
-.mptbm-oa-info:hover ~ .mptbm-oa-tooltip {
-    opacity: 1;
-    visibility: visible;
-}
-.mptbm-oa-tt-head {
-    font-size: 11.5px;
-    font-weight: 700;
-    color: #ffffff;
-    margin: 0 0 5px;
-}
-.mptbm-oa-tt-section {
-    font-size: 10px;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.07em;
-    color: #475569;
-    margin: 9px 0 3px;
-}
-.mptbm-oa-tooltip p {
-    margin: 0;
-    font-size: 11px;
-    color: #94a3b8;
-    line-height: 1.55;
 }
 
 /* ── Icon + name on the same horizontal line ─────────────────────
@@ -3192,19 +3683,277 @@ select.formControl,
     line-height: 1;
     transition: color 0.2s;
 }
+/* !important here: "mpStyle span" (mp_global's generic span reset, further
+   up the cascade) forces every <span> — including this one — to
+   display:inline-block, at a higher specificity (0,1,1) than a plain
+   ".mptbm-oa-lbl-on" class (0,1,0). Without it, "SELECTED" showed on
+   every card regardless of which radio was actually checked. */
 .mptbm-oa-lbl-on {
-    display: none;
+    display: none !important;
     color: var(--mp-primary);
     font-weight: 700;
 }
 .mptbm-oa-lbl-on::before { content: '✓ '; }
 
-.mptbm-oa-card input[type="radio"]:checked ~ .mptbm-oa-card-inner .mptbm-oa-lbl-off { display: none; }
-.mptbm-oa-card input[type="radio"]:checked ~ .mptbm-oa-card-inner .mptbm-oa-lbl-on  { display: inline; }
+.mptbm-oa-card input[type="radio"]:checked ~ .mptbm-oa-card-inner .mptbm-oa-lbl-off { display: none !important; }
+.mptbm-oa-card input[type="radio"]:checked ~ .mptbm-oa-card-inner .mptbm-oa-lbl-on  { display: inline !important; }
 
 /* Cancel the old ::after "✓ Selected" — superseded by .mptbm-oa-lbl-on */
 .mptbm-oa-card input[type="radio"]:checked ~ .mptbm-oa-card-inner::after {
     content: none;
+}
+
+/* ================================================================
+   SECTION: MANAGE REVIEWS (vehicle edit screen)
+   ================================================================ */
+/* Always rendered inside .mptbm_rent_editor_wrapper (which already supplies
+   the card's own border/radius/shadow, below its own header) - so this is
+   just a continuation of that same card via a divider, not a second nested
+   bordered box. Horizontal padding matches .mptbm_rent_editor_header's
+   (14px 20px) so "Manage Reviews" lines up with the header title above it. */
+.mptbm_reviews_manage_card {
+    border-top: 1px solid var(--mp-border-light);
+    padding: 18px 20px 20px;
+}
+.mptbm_reviews_manage_head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 16px;
+}
+.mptbm_reviews_manage_head .mptbm_rent_label { margin: 0; }
+.mptbm_reviews_count_badge {
+    display: inline-flex;
+    align-items: center;
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--mp-primary);
+    background: var(--mp-primary-light);
+    padding: 3px 10px;
+    border-radius: var(--mp-r-full);
+}
+
+/* ----- Add Review card ----- */
+.mptbm_add_review_card {
+    background: var(--mp-bg);
+    border: 1px solid var(--mp-border-light);
+    border-radius: var(--mp-r-md);
+    padding: 16px;
+    margin-bottom: 20px;
+}
+.mptbm_add_review_title {
+    margin: 0 0 2px;
+    font-size: 13.5px;
+    font-weight: 700;
+    color: var(--mp-text-800);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+.mptbm_add_review_title .dashicons { color: var(--mp-warning); font-size: 16px; width: 16px; height: 16px; }
+.mptbm_add_review_subtitle {
+    margin: 0 0 14px;
+    font-size: 12px;
+    color: var(--mp-text-500);
+}
+.mptbm_add_review_grid {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 14px;
+    align-items: start;
+    margin-bottom: 12px;
+}
+.mptbm_review_field_text { margin-bottom: 12px; }
+.mptbm_review_field label {
+    display: block;
+    margin-bottom: 5px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--mp-text-600);
+}
+.mptbm_review_input,
+.mptbm_review_textarea {
+    border: 1.5px solid var(--mp-border);
+    border-radius: var(--mp-r-md);
+    font-size: 13.5px;
+    font-family: var(--mp-font);
+    background: var(--mp-white);
+    color: var(--mp-text-800);
+    transition: border-color .15s ease, box-shadow .15s ease;
+    box-sizing: border-box;
+    outline: none;
+}
+.mptbm_review_input {
+    width: 100%;
+    height: 38px;
+    padding: 0 12px;
+}
+.mptbm_review_textarea {
+    width: 100%;
+    min-height: 76px;
+    padding: 10px 12px;
+    line-height: 1.6;
+    resize: vertical;
+}
+.mptbm_review_input:focus,
+.mptbm_review_textarea:focus {
+    border-color: var(--mp-primary);
+    box-shadow: var(--mp-shadow-focus);
+}
+.mptbm_review_input::placeholder,
+.mptbm_review_textarea::placeholder { color: var(--mp-text-400); }
+
+/* Clickable 1-5 star picker (replaces the old plain <select>) */
+.mptbm_star_picker {
+    display: inline-flex;
+    gap: 3px;
+    height: 38px;
+    align-items: center;
+}
+.mptbm_star_picker .dashicons {
+    font-size: 22px;
+    width: 22px;
+    height: 22px;
+    color: var(--mp-border-dark);
+    cursor: pointer;
+    transition: color .1s ease, transform .1s ease;
+}
+.mptbm_star_picker .dashicons:hover { transform: scale(1.12); }
+.mptbm_star_picker .dashicons.is-filled { color: var(--mp-warning); }
+
+.mptbm_add_review_actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+.mptbm_review_btn_primary {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: var(--mp-primary);
+    color: var(--mp-white) !important;
+    border: 0;
+    border-radius: var(--mp-r-md);
+    padding: 9px 18px;
+    font-size: 13px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: background .15s ease;
+    box-shadow: var(--mp-shadow-sm);
+}
+.mptbm_review_btn_primary:hover { background: var(--mp-primary-dark); }
+.mptbm_review_btn_primary:disabled { opacity: .6; cursor: not-allowed; }
+.mptbm_add_review_message {
+    font-size: 12.5px;
+    font-weight: 600;
+}
+.mptbm_add_review_message.is-error { color: var(--mp-danger); }
+.mptbm_add_review_message.is-success { color: var(--mp-success); }
+
+/* ----- Existing reviews list ----- */
+.mptbm_review_btn_ghost {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: var(--mp-white);
+    border: 1.5px solid var(--mp-border);
+    border-radius: var(--mp-r-md);
+    padding: 8px 16px;
+    font-size: 12.5px;
+    font-weight: 700;
+    color: var(--mp-text-700);
+    cursor: pointer;
+    transition: border-color .15s ease, color .15s ease;
+}
+.mptbm_review_btn_ghost:hover { border-color: var(--mp-primary); color: var(--mp-primary); }
+.mptbm_review_btn_ghost:disabled { opacity: .6; cursor: not-allowed; }
+
+.mptbm_reviews_empty_state {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    color: var(--mp-text-500);
+    padding: 10px 2px;
+}
+.mptbm_reviews_empty_state .dashicons { color: var(--mp-text-300); font-size: 18px; width: 18px; height: 18px; }
+
+.mptbm_reviews_list { margin-top: 12px; }
+#mptbm_load_more_reviews_btn { margin-top: 12px; }
+.mptbm_review_row {
+    display: flex;
+    gap: 12px;
+    padding: 14px 0;
+    border-bottom: 1px solid var(--mp-border-light);
+}
+.mptbm_review_row:first-child { padding-top: 0; }
+.mptbm_review_row:last-child { border-bottom: 0; }
+.mptbm_review_avatar {
+    flex: 0 0 auto;
+    width: 34px;
+    height: 34px;
+    border-radius: 50%;
+    background: var(--mp-primary);
+    color: var(--mp-white);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    font-weight: 700;
+}
+.mptbm_review_body { flex: 1 1 auto; min-width: 0; }
+.mptbm_review_row_head {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+.mptbm_review_author {
+    font-size: 13.5px;
+    font-weight: 700;
+    color: var(--mp-text-800);
+}
+.mptbm_review_date {
+    font-size: 11.5px;
+    color: var(--mp-text-400);
+}
+.mptbm_review_stars {
+    color: var(--mp-warning);
+    font-size: 12px;
+    letter-spacing: 1px;
+    margin-top: 2px;
+}
+.mptbm_review_text {
+    margin: 4px 0 0;
+    font-size: 13px;
+    line-height: 1.55;
+    color: var(--mp-text-600);
+}
+.mptbm_review_delete_btn {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 30px;
+    height: 30px;
+    border-radius: var(--mp-r-md);
+    border: 1px solid var(--mp-border);
+    background: var(--mp-white);
+    color: var(--mp-text-400);
+    cursor: pointer;
+    transition: all .15s ease;
+}
+.mptbm_review_delete_btn:hover {
+    background: var(--mp-danger-light);
+    border-color: var(--mp-danger-border);
+    color: var(--mp-danger);
+}
+.mptbm_review_delete_btn:disabled { opacity: .6; cursor: not-allowed; }
+.mptbm_review_delete_btn .dashicons { font-size: 15px; width: 15px; height: 15px; }
+
+@media (max-width: 640px) {
+    .mptbm_add_review_grid { grid-template-columns: 1fr; }
 }
 
 /* Responsive: 2-col on small viewports */
@@ -3326,4 +4075,785 @@ textarea.mptbm_field_error {
 
 @media (max-width: 600px) {
     .mptbm_toast { right: 12px; left: 12px; bottom: 12px; max-width: none; }
+}
+
+/* ================================================================
+   FEES & EXTRA SERVICE — unified workspace
+   ================================================================ */
+#mptbm_rent_settings_panel .mptbm_fees_services_workspace {
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+    color: var(--mp-text-800);
+}
+
+#mptbm_rent_settings_panel .mptbm_fees_services_group {
+    overflow: hidden;
+    scroll-margin-top: 120px;
+    border: 1px solid var(--mp-border);
+    border-radius: var(--mp-r-lg);
+    background: #f8fafc;
+    box-shadow: var(--mp-shadow-sm);
+}
+
+#mptbm_rent_settings_panel .mptbm_fees_services_group_header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 20px;
+    padding: 18px 20px;
+    border-bottom: 1px solid var(--mp-border);
+    background: #f2f4f7 !important;
+}
+
+#mptbm_rent_settings_panel .mptbm_fees_services_group_title {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-width: 0;
+}
+
+#mptbm_rent_settings_panel .mptbm_fees_services_group_title > span {
+    width: 38px;
+    height: 38px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 38px;
+    border: 1px solid #fde68a;
+    border-radius: 10px;
+    color: #d97706;
+    background: #fffbeb;
+    font-size: 14px;
+}
+
+#mptbm_rent_settings_panel .mptbm_fees_services_group.is-services .mptbm_fees_services_group_title > span {
+    border-color: #bfdbfe;
+    color: #2563eb;
+    background: #eff6ff;
+}
+
+#mptbm_rent_settings_panel .mptbm_fees_services_group_title h3 {
+    margin: 0 0 3px;
+    color: var(--mp-text-900);
+    font-size: 15px;
+    line-height: 1.3;
+    font-weight: 750;
+}
+
+#mptbm_rent_settings_panel .mptbm_fees_services_group_title p {
+    margin: 0;
+    color: var(--mp-text-500);
+    font-size: 12px;
+    line-height: 1.45;
+}
+
+#mptbm_rent_settings_panel .mptbm_fees_services_group_tag {
+    display: inline-flex;
+    align-items: center;
+    flex: 0 0 auto;
+    padding: 5px 9px;
+    border: 1px solid var(--mp-border);
+    border-radius: var(--mp-r-full);
+    color: var(--mp-text-500);
+    background: var(--mp-bg-muted);
+    font-size: 10px;
+    line-height: 1;
+    font-weight: 700;
+}
+
+/* Groups the tag + master toggle as one flex child on the right, so
+   .mptbm_fees_services_group_header's justify-content:space-between still
+   only splits into 2 columns (title-group | this), not 3 spread evenly. */
+#mptbm_rent_settings_panel .mptbm_fees_services_group_header_actions {
+    display: flex;
+    align-items: center;
+    flex: 0 0 auto;
+    gap: 12px;
+}
+
+#mptbm_rent_settings_panel .mptbm_fees_services_group_body {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    background: #fff;
+    padding: 16px;
+}
+
+#mptbm_rent_settings_panel .mptbm_fees_services_group_body > .mptbm_rent_editor_wrapper,
+#mptbm_rent_settings_panel .mptbm_fees_services_group_body > .mptbm_taxi_toggle_container,
+#mptbm_rent_settings_panel .mptbm_fees_services_group_body > .mptbm_taxi_ex_service_container {
+    margin: 0;
+    border: 1px solid var(--mp-border);
+    border-radius: var(--mp-r-md);
+    background: var(--mp-white);
+    box-shadow: var(--mp-shadow-xs);
+}
+
+#mptbm_rent_settings_panel .mptbm_fees_services_group_body .mptbm_taxi_ex_service_header {
+    min-height: 68px;
+    padding: 16px 18px;
+    border-bottom: 1px solid var(--mp-border-light);
+    background:
+        linear-gradient(105deg, rgba(var(--mp-primary-rgb), 0.035), transparent 46%),
+        var(--mp-white);
+    box-sizing: border-box;
+}
+
+#mptbm_rent_settings_panel .mptbm_fees_services_group_body .mptbm_taxi_ex_service_title_group h2 {
+    margin-bottom: 4px;
+    color: var(--mp-text-800);
+    font-size: 14px;
+}
+
+#mptbm_rent_settings_panel .mptbm_fees_services_group_body .mptbm_taxi_ex_service_title_group h2 i {
+    width: 28px;
+    height: 28px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    margin-right: 7px;
+    border-radius: 8px;
+    color: var(--mp-primary);
+    background: var(--mp-primary-light);
+    font-size: 12px;
+    vertical-align: middle;
+}
+
+#mptbm_rent_settings_panel .mptbm_fees_services_group_body .mptbm_taxi_ex_service_title_group p {
+    padding-left: 39px;
+    font-size: 11px;
+}
+
+#mptbm_rent_settings_panel .mptbm_fees_services_group_body .mptbm_taxi_ex_service_toggle_wrapper {
+    padding: 5px 7px 5px 9px;
+    border: 1px solid var(--mp-border);
+    border-radius: var(--mp-r-full);
+    background: #f8fafc;
+}
+
+#mptbm_rent_settings_panel .mptbm_fees_services_group_body .mptbm_taxi_ex_service_toggle_label {
+    min-width: 26px;
+    color: var(--mp-success);
+    font-size: 10px;
+    font-weight: 800;
+    text-align: center;
+}
+
+#mptbm_rent_settings_panel .mptbm_fees_services_group_body .mptbm_taxi_ex_service_toggle_label.mptbm_taxi_off {
+    color: var(--mp-text-400);
+}
+
+#mptbm_rent_settings_panel .mptbm_fees_services_group_body .mptbm_taxi_ex_service_body {
+    padding: 18px;
+}
+
+#mptbm_rent_settings_panel .mptbm_fees_services_group_body .mptbm_taxi_base_price_row {
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 12px;
+    margin: 0;
+}
+
+#mptbm_rent_settings_panel .mptbm_fees_services_group_body .mptbm_taxi_field {
+    padding: 14px;
+    border: 1px solid var(--mp-border-light);
+    border-radius: var(--mp-r-md);
+    background: #fbfcfe;
+}
+
+#mptbm_rent_settings_panel .mptbm_fees_services_group_body .mptbm_taxi_field label {
+    margin-bottom: 3px;
+    color: var(--mp-text-700);
+    font-size: 12px;
+    font-weight: 700;
+}
+
+#mptbm_rent_settings_panel .mptbm_fees_services_group_body .mptbm_taxi_field .mptbm_taxi_help {
+    min-height: 32px;
+    margin-bottom: 9px;
+    font-size: 10px;
+    line-height: 1.45;
+}
+
+#mptbm_rent_settings_panel .mptbm_fees_services_group_body .mptbm_taxi_field input,
+#mptbm_rent_settings_panel .mptbm_fees_services_group_body .mptbm_taxi_field select {
+    height: 39px;
+    margin: auto 0 0;
+    background-color: var(--mp-white);
+}
+
+#mptbm_rent_settings_panel .mptbm_fees_services_group_body .mptbm_taxi_toggle_box {
+    padding: 13px 15px;
+    border-color: var(--mp-border);
+    background: #fbfcfe;
+}
+
+#mptbm_rent_settings_panel .mptbm_fees_services_group.is-services .mptbm_taxi_ex_service_filter_row {
+    justify-content: flex-start;
+    margin: 0 0 14px;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    gap: 10px;
+}
+
+#mptbm_rent_settings_panel .mptbm_fees_services_group.is-services .mptbm_taxi_ex_service_filter_row label {
+    color: var(--mp-text-500);
+    font-size: 12px;
+    font-weight: 600;
+}
+
+#mptbm_rent_settings_panel .mptbm_fees_services_group.is-services #mptbm_extra_services_id {
+    width: min(100%, 280px);
+}
+
+#mptbm_rent_settings_panel .mptbm_fees_services_group.is-services .mptbm_taxi_ex_service_body > .mpStyle {
+    width: 100%;
+    overflow-x: auto;
+}
+
+#mptbm_rent_settings_panel .mptbm_fees_services_group.is-services .mptbm_taxi_ex_service_table {
+    min-width: 720px;
+}
+
+#mptbm_rent_settings_panel .mptbm_fees_services_group.is-services .mptbm_taxi_ex_service_footer {
+    padding-top: 12px;
+    border-top: 1px solid var(--mp-border-light);
+}
+
+#mptbm_rent_settings_panel .mptbm_fees_services_group.is-services .mptbm_taxi_ex_service_add_btn {
+    border-radius: 6px;
+    box-shadow: none;
+}
+
+@media (max-width: 680px) {
+    #mptbm_rent_settings_panel .mptbm_fees_services_group_header,
+    #mptbm_rent_settings_panel .mptbm_fees_services_group_body .mptbm_taxi_ex_service_header {
+        align-items: flex-start;
+        flex-direction: column;
+    }
+
+    #mptbm_rent_settings_panel .mptbm_fees_services_group_tag {
+        margin-left: 50px;
+    }
+
+    #mptbm_rent_settings_panel .mptbm_fees_services_group_body {
+        padding: 12px;
+    }
+
+    #mptbm_rent_settings_panel .mptbm_fees_services_group_body .mptbm_taxi_ex_service_toggle_wrapper {
+        align-self: flex-end;
+    }
+
+    #mptbm_rent_settings_panel .mptbm_fees_services_group.is-services .mptbm_taxi_ex_service_filter_row {
+        align-items: stretch;
+        flex-direction: column;
+    }
+
+    #mptbm_rent_settings_panel .mptbm_fees_services_group.is-services #mptbm_extra_services_id {
+        width: 100%;
+        max-width: none;
+    }
+}
+
+@media (max-width: 480px) {
+    #mptbm_rent_settings_panel .mptbm_fees_services_group_tag {
+        margin-left: 0;
+    }
+
+}
+
+/* ================================================================
+   CUSTOMER ADD-ONS — MINIMAL
+   ================================================================ */
+#mptbm_rent_settings_panel .mptbm_fees_services_group.is-services.is-minimal {
+    background: #fff;
+    box-shadow: none;
+}
+
+#mptbm_rent_settings_panel .mptbm_fees_services_group.is-services.is-minimal .mptbm_fees_services_group_header {
+    padding: 14px 16px;
+    background: #fff !important;
+}
+
+#mptbm_rent_settings_panel .mptbm_fees_services_group.is-services.is-minimal .mptbm_fees_services_group_title h3 {
+    margin: 0 0 2px;
+    font-size: 14px;
+    font-weight: 650;
+}
+
+#mptbm_rent_settings_panel .mptbm_fees_services_group.is-services.is-minimal .mptbm_fees_services_group_title p {
+    font-size: 12px;
+    color: var(--mp-text-500);
+}
+
+#mptbm_rent_settings_panel .mptbm_fees_services_group.is-services.is-minimal .mptbm_fees_services_group_body {
+    padding: 14px 16px 16px;
+    gap: 0;
+}
+
+#mptbm_rent_settings_panel .mptbm_fees_services_group.is-services.is-minimal .mptbm_fees_services_group_body > .mptbm_taxi_ex_service_container {
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+}
+
+#mptbm_rent_settings_panel .mptbm_fees_services_group.is-services.is-minimal .mptbm_taxi_ex_service_body {
+    padding: 0;
+}
+
+#mptbm_rent_settings_panel .mptbm_fees_services_group.is-services.is-minimal .mptbm_taxi_ex_service_toggle_wrapper {
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    gap: 8px;
+}
+
+#mptbm_rent_settings_panel .mptbm_taxi_ex_service_catalogue {
+    width: 100%;
+    overflow: hidden;
+    border: 1px solid var(--mp-border);
+    border-radius: 8px;
+    background: #fff;
+    box-sizing: border-box;
+}
+
+#mptbm_rent_settings_panel .mptbm_fees_services_group.is-services .mptbm_taxi_ex_service_body > .mpStyle.mptbm_taxi_ex_service_catalogue {
+    overflow: hidden;
+}
+
+#mptbm_rent_settings_panel .mptbm_taxi_ex_service_table_toolbar {
+    min-height: 0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--mp-border);
+    background: #fff;
+    box-sizing: border-box;
+}
+
+#mptbm_rent_settings_panel .mptbm_taxi_ex_service_table_heading {
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+#mptbm_rent_settings_panel .mptbm_taxi_ex_service_table_heading strong {
+    color: var(--mp-text-800);
+    font-size: 13px;
+    font-weight: 600;
+    line-height: 1.3;
+}
+
+#mptbm_rent_settings_panel .mptbm_taxi_ex_service_count {
+    min-width: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 2px 8px;
+    border: 1px solid var(--mp-border);
+    border-radius: 999px;
+    background: #f8fafc;
+    color: var(--mp-text-600);
+    font-size: 11px;
+    font-weight: 600;
+    white-space: nowrap;
+    box-sizing: border-box;
+}
+
+#mptbm_rent_settings_panel .mptbm_taxi_ex_service_count strong {
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--mp-text-700);
+}
+
+#mptbm_rent_settings_panel .mptbm_taxi_ex_service_table_shell {
+    position: relative;
+    padding: 0;
+}
+
+#mptbm_rent_settings_panel .mptbm_taxi_ex_service_table_scroll {
+    width: 100%;
+    overflow-x: auto;
+    scrollbar-color: var(--mp-border-dark) transparent;
+    scrollbar-width: thin;
+}
+
+#mptbm_rent_settings_panel .mptbm_taxi_ex_service_catalogue .mptbm_taxi_ex_service_table {
+    width: 100%;
+    min-width: 720px;
+    table-layout: fixed;
+    border-collapse: collapse;
+    border-spacing: 0;
+    background: #fff;
+    font-size: 13px;
+}
+
+#mptbm_rent_settings_panel .mptbm_fees_services_group.is-services .mptbm_taxi_ex_service_catalogue .mptbm_taxi_ex_service_table {
+    min-width: 720px;
+}
+
+#mptbm_rent_settings_panel .mptbm_taxi_ex_service_table th:nth-child(1) { width: 56px; }
+#mptbm_rent_settings_panel .mptbm_taxi_ex_service_table th:nth-child(2) { width: 22%; }
+#mptbm_rent_settings_panel .mptbm_taxi_ex_service_table th:nth-child(3) { width: auto; }
+#mptbm_rent_settings_panel .mptbm_taxi_ex_service_table th:nth-child(4) { width: 100px; }
+#mptbm_rent_settings_panel .mptbm_taxi_ex_service_table th:nth-child(5) { width: 72px; }
+
+#mptbm_rent_settings_panel .mptbm_taxi_ex_service_table thead th {
+    height: 34px;
+    padding: 6px 10px;
+    border: 0;
+    border-bottom: 1px solid var(--mp-border);
+    background: #fafbfc !important;
+    color: var(--mp-text-500);
+    font-size: 11px;
+    font-weight: 600;
+    line-height: 1.2;
+    letter-spacing: 0;
+    text-transform: none;
+    vertical-align: middle;
+    box-sizing: border-box;
+}
+
+#mptbm_rent_settings_panel .mptbm_taxi_ex_service_table thead th:first-child,
+#mptbm_rent_settings_panel .mptbm_taxi_ex_service_table thead th:last-child {
+    border-left: 0;
+    border-right: 0;
+    border-radius: 0;
+    text-align: center;
+}
+
+#mptbm_rent_settings_panel .mptbm_taxi_ex_service_catalogue .mptbm_taxi_ex_service_table th {
+    padding: 6px 10px;
+    border: 0;
+    border-bottom: 1px solid var(--mp-border);
+    background: #fafbfc;
+    color: var(--mp-text-500);
+    font-size: 11px;
+    font-weight: 600;
+    text-align: left;
+    text-transform: none;
+    letter-spacing: 0;
+    white-space: nowrap;
+}
+
+#mptbm_rent_settings_panel .mptbm_taxi_ex_service_table th.is-actions {
+    text-align: center;
+}
+
+#mptbm_rent_settings_panel .mptbm_taxi_ex_service_head_label {
+    display: inline-flex;
+    align-items: center;
+    white-space: nowrap;
+}
+
+#mptbm_rent_settings_panel .mptbm_taxi_ex_service_catalogue .mptbm_taxi_ex_service_table td {
+    height: auto;
+    padding: 8px 10px;
+    vertical-align: middle;
+    background: #fff;
+    border: 0;
+    border-bottom: 1px solid var(--mp-border-light);
+    border-radius: 0;
+    box-shadow: none;
+    transition: background 0.15s ease;
+    box-sizing: border-box;
+}
+
+#mptbm_rent_settings_panel .mptbm_taxi_ex_service_catalogue .mptbm_taxi_ex_service_table td:first-child,
+#mptbm_rent_settings_panel .mptbm_taxi_ex_service_catalogue .mptbm_taxi_ex_service_table td:last-child {
+    border-left: 0;
+    border-right: 0;
+    border-radius: 0;
+}
+
+#mptbm_rent_settings_panel .mptbm_taxi_ex_service_catalogue .mptbm_taxi_ex_service_table tr:hover td {
+    background: #fafbfc;
+    border-color: var(--mp-border-light);
+    box-shadow: none;
+}
+
+#mptbm_rent_settings_panel .mptbm_taxi_ex_service_table tr.ui-sortable-helper td {
+    background: #fff;
+    border-color: var(--mp-border);
+    box-shadow: 0 4px 12px rgba(15, 23, 42, 0.08);
+}
+
+#mptbm_rent_settings_panel .mptbm_taxi_ex_service_sort_placeholder {
+    height: 52px;
+    border: 1px dashed var(--mp-border);
+    border-radius: 0;
+    background: #f8fafc;
+    visibility: visible !important;
+}
+
+#mptbm_rent_settings_panel .mptbm_taxi_ex_service_table_shell.is-empty .mptbm_taxi_ex_service_table_scroll::after {
+    content: "No services yet.";
+    min-height: 72px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin: 0;
+    padding: 20px;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    color: var(--mp-text-400);
+    font-size: 12px;
+    text-align: center;
+    box-sizing: border-box;
+}
+
+#mptbm_rent_settings_panel .mptbm_taxi_ex_service_catalogue #mptbm_taxi_ex_service_tbody:empty::after {
+    content: none;
+    display: none;
+}
+
+#mptbm_rent_settings_panel .mptbm_taxi_ex_service_catalogue .mptbm_taxi_ex_service_input,
+#mptbm_rent_settings_panel .mptbm_taxi_ex_service_catalogue .mptbm_taxi_ex_service_select {
+    width: 100%;
+    height: 36px;
+    padding: 0 10px;
+    border: 1px solid var(--mp-border);
+    border-radius: 6px;
+    background: #fff;
+    color: var(--mp-text-800);
+    font-size: 13px;
+    font-family: var(--mp-font);
+    box-sizing: border-box;
+    outline: none;
+    transition: border-color 0.15s ease;
+}
+
+#mptbm_rent_settings_panel .mptbm_taxi_ex_service_catalogue .mptbm_taxi_ex_service_input:focus,
+#mptbm_rent_settings_panel .mptbm_taxi_ex_service_catalogue .mptbm_taxi_ex_service_select:focus {
+    border-color: var(--mp-primary);
+    background: #fff;
+    box-shadow: none;
+}
+
+#mptbm_rent_settings_panel .mptbm_taxi_ex_service_catalogue textarea.mptbm_taxi_ex_service_select {
+    min-height: 36px;
+    height: 36px;
+    padding: 7px 10px;
+    resize: vertical;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    line-height: 1.35;
+}
+
+#mptbm_rent_settings_panel .mptbm_taxi_ex_service_price_field {
+    position: relative;
+}
+
+#mptbm_rent_settings_panel .mptbm_taxi_ex_service_price_field > span {
+    position: absolute;
+    top: 50%;
+    left: 10px;
+    z-index: 1;
+    transform: translateY(-50%);
+    color: var(--mp-text-400);
+    font-size: 12px;
+    font-weight: 600;
+    pointer-events: none;
+}
+
+#mptbm_rent_settings_panel .mptbm_taxi_ex_service_price_field .mptbm_taxi_ex_service_input {
+    padding-left: 22px;
+    font-variant-numeric: tabular-nums;
+}
+
+#mptbm_rent_settings_panel .mptbm_taxi_ex_service_catalogue .mptbm_taxi_ex_service_actions {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    white-space: nowrap;
+}
+
+#mptbm_rent_settings_panel .mptbm_taxi_ex_service_catalogue .mptbm_taxi_ex_service_btn_del,
+#mptbm_rent_settings_panel .mptbm_taxi_ex_service_catalogue .mptbm_taxi_ex_service_btn_drag {
+    width: 28px;
+    height: 28px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    border: 0;
+    border-radius: 4px;
+    background: transparent;
+    cursor: pointer;
+    color: var(--mp-text-400);
+}
+
+#mptbm_rent_settings_panel .mptbm_taxi_ex_service_catalogue .mptbm_taxi_ex_service_btn_drag {
+    cursor: grab;
+}
+
+#mptbm_rent_settings_panel .mptbm_taxi_ex_service_catalogue .mptbm_taxi_ex_service_btn_drag:active {
+    cursor: grabbing;
+}
+
+#mptbm_rent_settings_panel .mptbm_taxi_ex_service_catalogue .mptbm_taxi_ex_service_btn_drag:hover {
+    background: #f1f5f9;
+    color: var(--mp-text-700);
+}
+
+#mptbm_rent_settings_panel .mptbm_taxi_ex_service_catalogue .mptbm_taxi_ex_service_btn_del:hover {
+    background: #fef2f2;
+    color: var(--mp-danger);
+}
+
+#mptbm_rent_settings_panel .mptbm_taxi_ex_service_catalogue .mp_add_icon_image_area {
+    width: 36px;
+    max-width: 36px;
+    min-height: 36px;
+    margin: 0 auto;
+    border: 1px solid var(--mp-border);
+    border-radius: 6px;
+    background: #f8fafc;
+}
+
+#mptbm_rent_settings_panel .mptbm_taxi_ex_service_catalogue .mp_icon_item {
+    min-height: 36px;
+    border-radius: 6px;
+    background: transparent;
+}
+
+#mptbm_rent_settings_panel .mptbm_taxi_ex_service_catalogue .mp_icon_item .allCenter {
+    color: var(--mp-text-600);
+    font-size: 16px;
+}
+
+#mptbm_rent_settings_panel .mptbm_taxi_ex_service_catalogue .mptbm_taxi_ex_service_footer {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 12px;
+    margin: 0;
+    padding: 10px 12px;
+    border-top: 1px solid var(--mp-border);
+    background: #fff;
+}
+
+#mptbm_rent_settings_panel .mptbm_taxi_ex_service_add_btn {
+    background: transparent;
+    color: var(--mp-text-700);
+    border: 1px solid var(--mp-border);
+    padding: 7px 12px;
+    border-radius: 6px;
+    font-weight: 600;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 12px;
+    transition: background 0.15s ease, border-color 0.15s ease;
+    box-shadow: none;
+}
+
+#mptbm_rent_settings_panel .mptbm_taxi_ex_service_add_btn:hover {
+    background: #f8fafc;
+    color: var(--mp-text-800);
+    border-color: var(--mp-border-dark);
+    transform: none;
+    box-shadow: none;
+}
+
+#mptbm_rent_settings_panel .mptbm_taxi_ex_service_footer_hint {
+    display: none;
+}
+
+.mptbm_fees_services_group .mptbm_rent_editor_header {
+    background: #fff !important;
+}
+
+@media (max-width: 720px) {
+    #mptbm_rent_settings_panel .mptbm_taxi_ex_service_table_toolbar,
+    #mptbm_rent_settings_panel .mptbm_taxi_ex_service_catalogue .mptbm_taxi_ex_service_footer {
+        align-items: center;
+        flex-direction: row;
+    }
+
+    #mptbm_rent_settings_panel .mptbm_taxi_ex_service_count {
+        margin-left: 0;
+    }
+
+    #mptbm_rent_settings_panel .mptbm_taxi_ex_service_catalogue .mptbm_taxi_ex_service_table {
+        min-width: 0;
+    }
+
+    #mptbm_rent_settings_panel .mptbm_fees_services_group.is-services .mptbm_taxi_ex_service_catalogue .mptbm_taxi_ex_service_table {
+        min-width: 0;
+    }
+
+    #mptbm_rent_settings_panel .mptbm_taxi_ex_service_table thead {
+        display: none;
+    }
+
+    #mptbm_rent_settings_panel .mptbm_taxi_ex_service_table tbody,
+    #mptbm_rent_settings_panel .mptbm_taxi_ex_service_table tr,
+    #mptbm_rent_settings_panel .mptbm_taxi_ex_service_table td {
+        width: 100%;
+        display: block;
+        box-sizing: border-box;
+    }
+
+    #mptbm_rent_settings_panel .mptbm_taxi_ex_service_table tr {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 10px;
+        margin: 0;
+        padding: 12px;
+        border: 0;
+        border-bottom: 1px solid var(--mp-border);
+        border-radius: 0;
+        background: #fff;
+    }
+
+    #mptbm_rent_settings_panel .mptbm_taxi_ex_service_catalogue .mptbm_taxi_ex_service_table td,
+    #mptbm_rent_settings_panel .mptbm_taxi_ex_service_catalogue .mptbm_taxi_ex_service_table td:first-child,
+    #mptbm_rent_settings_panel .mptbm_taxi_ex_service_catalogue .mptbm_taxi_ex_service_table td:last-child {
+        height: auto;
+        padding: 0;
+        border: 0;
+        border-radius: 0;
+        background: transparent;
+        box-shadow: none;
+    }
+
+    #mptbm_rent_settings_panel .mptbm_taxi_ex_service_table td::before {
+        content: attr(data-label);
+        display: block;
+        margin: 0 0 4px;
+        color: var(--mp-text-500);
+        font-size: 11px;
+        font-weight: 600;
+        text-transform: none;
+        letter-spacing: 0;
+    }
+
+    #mptbm_rent_settings_panel .mptbm_taxi_ex_service_table .mptbm_taxi_ex_service_icon_cell::before,
+    #mptbm_rent_settings_panel .mptbm_taxi_ex_service_table .mptbm_taxi_ex_service_actions::before {
+        display: none;
+    }
+
+    #mptbm_rent_settings_panel .mptbm_taxi_ex_service_catalogue .mp_add_icon_image_area {
+        margin: 0;
+    }
+
+    #mptbm_rent_settings_panel .mptbm_taxi_ex_service_catalogue .mptbm_taxi_ex_service_actions {
+        justify-content: flex-start;
+    }
+
+    #mptbm_rent_settings_panel .mptbm_taxi_ex_service_catalogue .mptbm_taxi_ex_service_add_btn {
+        width: auto;
+    }
 }

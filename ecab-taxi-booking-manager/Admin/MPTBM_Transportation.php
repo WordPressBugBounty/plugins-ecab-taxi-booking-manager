@@ -238,7 +238,12 @@ class MPTBM_Transportation
                 'hourly'      => get_post_meta($pid, 'mptbm_hour_price', true),
                 'model'       => $model,
                 'status'      => $post->post_status,
-                'image'       => get_post_meta($pid, 'feature_image', true) ?: get_the_post_thumbnail_url($pid, 'medium_large'),
+                // The real featured image always wins - 'feature_image' postmeta is a
+                // legacy leftover the dummy-data importer used to write alongside the
+                // real thumbnail (see MPTBM_Dummy_Import.php), never updated again
+                // after that, so preferring it here made the list show the original
+                // demo image forever even after an admin changed the featured image.
+                'image'       => get_the_post_thumbnail_url($pid, 'medium_large') ?: get_post_meta($pid, 'feature_image', true),
                 'price_based' => get_post_meta($pid, 'mptbm_price_based', true),
                 'date_type'   => get_post_meta($pid, 'mptbm_date_type', true) ?: 'repeated',
                 'all_time'    => get_post_meta($pid, 'mptbm_available_for_all_time', true) === 'on',
@@ -248,7 +253,7 @@ class MPTBM_Transportation
                 'tags'        => is_array($tags) ? array_filter($tags) : array(),
                 'modified'    => $post->post_modified,
                 'author'      => get_the_author_meta('display_name', $post->post_author),
-                'edit_link'   => admin_url('admin.php?page=mptbm-rent-edit&post_id=' . $pid),
+                'edit_link'   => get_edit_post_link($pid, ''),
                 'trash_link'  => wp_nonce_url(admin_url('admin-post.php?action=mptbm_trash_transport&id=' . $pid), 'mptbm_trash_' . $pid),
                 'restore_link' => wp_nonce_url(admin_url('admin-post.php?action=mptbm_restore_transport&id=' . $pid), 'mptbm_restore_' . $pid),
                 'delete_link'  => wp_nonce_url(admin_url('admin-post.php?action=mptbm_delete_transport&id=' . $pid), 'mptbm_delete_' . $pid),
@@ -344,6 +349,19 @@ class MPTBM_Transportation
                 echo '<span class="mptbm-chip">' . $svg . ' ' . esc_html($f[$key]) . '</span>';
             }
         }
+        // mptbm_features labels are free text an admin can rename or add to per
+        // vehicle - anything that isn't one of the 4 exact strings above (or
+        // name/model, already shown elsewhere in this row) was silently
+        // dropped instead of getting a chip. Show it anyway with a generic
+        // icon, so a vehicle's real custom features never just vanish here.
+        $generic_svg = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 8v4l2.5 1.5"/></svg>';
+        $known_keys  = array_merge(array_keys($specs), array('name', 'model'));
+        foreach ($f as $label => $value) {
+            if ($value === '' || in_array($label, $known_keys, true)) {
+                continue;
+            }
+            echo '<span class="mptbm-chip">' . $generic_svg . ' ' . esc_html($value) . '</span>';
+        }
         $tags = isset($it['tags']) && is_array($it['tags']) ? array_slice($it['tags'], 0, 5) : array();
         foreach ($tags as $tag) {
             echo '<span class="mptbm-chip is-tag"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.59 13.41l-7.17 7.17a2 2 0 01-2.83 0L2 12V2h10l8.59 8.59a2 2 0 010 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg> ' . esc_html($tag) . '</span>';
@@ -379,7 +397,8 @@ class MPTBM_Transportation
         $items     = $is_trash ? $this->get_items(array('trash')) : $active;
         $base_url  = $this->base_url();
         $trash_url = add_query_arg('mptbm_status', 'trash', $base_url);
-        $add_url   = admin_url('admin.php?page=mptbm-rent-edit');
+        $add_url   = admin_url('post-new.php?post_type=mptbm_rent');
+        MPTBM_Admin_Shell::render_shell_open();
         ?>
         <div class="wrap mptbm-fleet-wrap">
             <div class="mptbm-fleet mptbm-view-list">
@@ -390,7 +409,7 @@ class MPTBM_Transportation
                 if ($mptbm_msg === 'duplicated') :
                     // phpcs:ignore WordPress.Security.NonceVerification.Recommended
                     $new_id    = isset($_GET['mptbm_new']) ? intval($_GET['mptbm_new']) : 0;
-                    $edit_copy = ($new_id && get_post_type($new_id) === 'mptbm_rent') ? admin_url('admin.php?page=mptbm-rent-edit&post_id=' . $new_id) : '';
+                    $edit_copy = ($new_id && get_post_type($new_id) === 'mptbm_rent') ? get_edit_post_link($new_id, '') : '';
                     ?>
                     <div class="mptbm-notice success">
                         <svg width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></svg>
@@ -627,12 +646,12 @@ class MPTBM_Transportation
                                 </td>
                                 <td data-label="<?php esc_attr_e('Actions', 'ecab-taxi-booking-manager'); ?>">
                                     <?php if ($is_trash) : ?>
-                                        <a class="mptbm-table-edit" href="<?php echo esc_url($it['restore_link']); ?>"><?php esc_html_e('Restore', 'ecab-taxi-booking-manager'); ?></a>
-                                        <a class="mptbm-table-del" href="<?php echo esc_url($it['delete_link']); ?>" onclick="return confirm('<?php echo esc_js(__('Permanently delete this item? This cannot be undone.', 'ecab-taxi-booking-manager')); ?>');"><?php esc_html_e('Delete', 'ecab-taxi-booking-manager'); ?></a>
+                                        <a class="mptbm-table-edit" href="<?php echo esc_url($it['restore_link']); ?>" title="<?php esc_attr_e('Restore', 'ecab-taxi-booking-manager'); ?>" aria-label="<?php esc_attr_e('Restore', 'ecab-taxi-booking-manager'); ?>"><i class="fas fa-trash-restore" aria-hidden="true"></i></a>
+                                        <a class="mptbm-table-del" href="<?php echo esc_url($it['delete_link']); ?>" onclick="return confirm('<?php echo esc_js(__('Permanently delete this item? This cannot be undone.', 'ecab-taxi-booking-manager')); ?>');" title="<?php esc_attr_e('Delete', 'ecab-taxi-booking-manager'); ?>" aria-label="<?php esc_attr_e('Delete', 'ecab-taxi-booking-manager'); ?>"><i class="fas fa-trash-alt" aria-hidden="true"></i></a>
                                     <?php else : ?>
-                                        <a class="mptbm-table-edit" href="<?php echo esc_url($it['edit_link']); ?>"><?php esc_html_e('Edit', 'ecab-taxi-booking-manager'); ?></a>
-                                        <a class="mptbm-table-dup" href="<?php echo esc_url($it['duplicate_link']); ?>" onclick="return confirm('<?php echo esc_js(__('Create a duplicate of this transportation?', 'ecab-taxi-booking-manager')); ?>');"><?php esc_html_e('Duplicate', 'ecab-taxi-booking-manager'); ?></a>
-                                        <a class="mptbm-table-del" href="<?php echo esc_url($it['trash_link']); ?>" onclick="return confirm('<?php echo esc_js(__('Move this item to Trash?', 'ecab-taxi-booking-manager')); ?>');"><?php esc_html_e('Trash', 'ecab-taxi-booking-manager'); ?></a>
+                                        <a class="mptbm-table-edit" href="<?php echo esc_url($it['edit_link']); ?>" title="<?php esc_attr_e('Edit', 'ecab-taxi-booking-manager'); ?>" aria-label="<?php esc_attr_e('Edit', 'ecab-taxi-booking-manager'); ?>"><i class="fas fa-pen" aria-hidden="true"></i></a>
+                                        <a class="mptbm-table-dup" href="<?php echo esc_url($it['duplicate_link']); ?>" onclick="return confirm('<?php echo esc_js(__('Create a duplicate of this transportation?', 'ecab-taxi-booking-manager')); ?>');" title="<?php esc_attr_e('Duplicate', 'ecab-taxi-booking-manager'); ?>" aria-label="<?php esc_attr_e('Duplicate', 'ecab-taxi-booking-manager'); ?>"><i class="far fa-copy" aria-hidden="true"></i></a>
+                                        <a class="mptbm-table-del" href="<?php echo esc_url($it['trash_link']); ?>" onclick="return confirm('<?php echo esc_js(__('Move this item to Trash?', 'ecab-taxi-booking-manager')); ?>');" title="<?php esc_attr_e('Trash', 'ecab-taxi-booking-manager'); ?>" aria-label="<?php esc_attr_e('Trash', 'ecab-taxi-booking-manager'); ?>"><i class="fas fa-trash-alt" aria-hidden="true"></i></a>
                                     <?php endif; ?>
                                 </td>
                             </tr>
@@ -651,6 +670,7 @@ class MPTBM_Transportation
             </div>
         </div>
         <?php
+        MPTBM_Admin_Shell::render_shell_close();
     }
 }
 

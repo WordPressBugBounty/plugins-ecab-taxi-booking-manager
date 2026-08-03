@@ -112,37 +112,31 @@ if (!class_exists('MPTBM_Dependencies')) {
             // Ensure jQuery UI Sortable is loaded before the add/edit script so drag handles work
             wp_enqueue_script('mptbm_taxi_add_edit', MPTBM_PLUGIN_URL . '/assets/admin/mptbm_taxi_add_edit.js', array('jquery', 'jquery-ui-sortable'), $this->asset_ver('assets/admin/mptbm_taxi_add_edit.js'), true);
             wp_localize_script('mptbm_taxi_add_edit', 'mptbm_editor_l10n', array(
-                'ajax_url'   => admin_url('admin-ajax.php'),
-                'action'     => 'mptbm_ajax_save_rent',
-                'i18n'       => array(
-                    'saving'        => __('Saving…', 'ecab-taxi-booking-manager'),
-                    'saved'         => __('Transportation saved successfully.', 'ecab-taxi-booking-manager'),
-                    'required'      => __('Please complete the required field: %s', 'ecab-taxi-booking-manager'),
-                    'required_generic' => __('Please complete the highlighted required field.', 'ecab-taxi-booking-manager'),
-                    'network_error' => __('Could not reach the server. Please check your connection and try again.', 'ecab-taxi-booking-manager'),
-                ),
+                'ajax_url'       => admin_url('admin-ajax.php'),
+                'required_error' => esc_html__('Complete all required driver fields.', 'ecab-taxi-booking-manager'),
+                'request_error'  => esc_html__('The driver could not be added. Please try again.', 'ecab-taxi-booking-manager'),
             ));
 			wp_enqueue_script('mptbm_admin', MPTBM_PLUGIN_URL . '/assets/admin/mptbm_admin.js', array('jquery'), $this->asset_ver('assets/admin/mptbm_admin.js'), true);
 			wp_localize_script('mptbm_admin', 'mptbm_admin_security', array(
 				'extra_service_nonce' => wp_create_nonce('mptbm_get_extra_service'),
 			));
-            wp_enqueue_script('mptbm_tooltip', MPTBM_PLUGIN_URL . '/assets/admin/mptbm_tooltip.js', array('jquery'), $this->asset_ver('assets/admin/mptbm_tooltip.js'), true);
+            wp_enqueue_script('mptbm_tooltip', MPTBM_PLUGIN_URL . '/assets/admin/mptbm_tooltip.js', array('jquery', 'jquery-ui-tooltip'), $this->asset_ver('assets/admin/mptbm_tooltip.js'), true);
             wp_enqueue_script('mptbm_transportation_lists', MPTBM_PLUGIN_URL . '/assets/admin/mptbm_transportation_lists.js', array('jquery'), $this->asset_ver('assets/admin/mptbm_transportation_lists.js'), true);
             wp_enqueue_script('mptbm_right_side_js', MPTBM_PLUGIN_URL . '/assets/admin/mptbm_right_side_js.js', array('jquery'), $this->asset_ver('assets/admin/mptbm_right_side_js.js'), true);
             wp_enqueue_style('mptbm_transportation_lists', MPTBM_PLUGIN_URL . '/assets/admin/mptbm_transportation_lists.css', array(), $this->asset_ver('assets/admin/mptbm_transportation_lists.css'));
 
-            $editor_type = isset( $_GET['editor'] ) ? sanitize_text_field( wp_unslash( $_GET['editor'] ) ) : 'new';
-            if ( $editor_type !== 'old') {
-                if ( class_exists('Distance_Tier_Pricing_Addon') || function_exists('distance_tier_pricing_addon_init')) {
-                    wp_enqueue_style('admin-distance-tier-pricing', MPTBM_PLUGIN_URL . '/assets/admin/distance_tier_pricing/css/admin-distance-tier-pricing.css', array(), $this->asset_ver('assets/admin/distance_tier_pricing/css/admin-distance-tier-pricing.css'));
-                    wp_enqueue_script('admin-distance-tier-pricing', MPTBM_PLUGIN_URL . '/assets/admin/distance_tier_pricing/js/admin-distance-tier-pricing.js', array('jquery'), $this->asset_ver('assets/admin/distance_tier_pricing/js/admin-distance-tier-pricing.js'), true);
-                }
-
-                if (class_exists('Taxi_Peak_Hour_Pricing_Addon') || function_exists('taxi_peak_hour_pricing_addon_init')) {
-                    wp_enqueue_style('admin-peak-hour-pricing', MPTBM_PLUGIN_URL . '/assets/admin/peak_hour_pricing_addon/css/admin-peak-hour-pricing.css', array(), $this->asset_ver('assets/admin/peak_hour_pricing_addon/css/admin-peak-hour-pricing.css'));
-                    wp_enqueue_script('admin-peak-hour-pricing', MPTBM_PLUGIN_URL . '/assets/admin/peak_hour_pricing_addon/js/admin-peak-hour-pricing.js', array('jquery'), $this->asset_ver('assets/admin/peak_hour_pricing_addon/js/admin-peak-hour-pricing.js'), true);
-                }
-            }
+            // NOTE: Distance Tier Pricing and Peak Hour Pricing are separate addon
+            // plugins (distance-base-tier-pricing-addon-for-taxi-booking,
+            // taxi-peak-hour-pricing-addon) that ALREADY enqueue their own
+            // admin-*-pricing.css/.js from their own admin_enqueue_scripts hook,
+            // correctly scoped to the mptbm_rent post.php/post-new.php screen.
+            // This block used to ALSO enqueue bundled duplicate copies of those
+            // same files (under different handles, so WordPress had no way to
+            // dedupe them) whenever the addon was active — meaning every click
+            // handler in either addon's JS was bound twice and fired twice per
+            // click, which is what made toggles like "Show Advanced Conditions"
+            // appear to switch on and immediately back off again. Removed rather
+            // than fixed-in-place since the addons' own enqueue already covers it.
 
             // No transport templates
             wp_enqueue_script('mptbm-no-transport-templates', MPTBM_PLUGIN_URL . '/assets/admin/js/no-transport-templates.js', array('jquery'), $this->asset_ver('assets/admin/js/no-transport-templates.js'), true);
@@ -188,10 +182,17 @@ if (!class_exists('MPTBM_Dependencies')) {
             $this->global_enqueue();
             wp_enqueue_script('wc-checkout');
             //
-            wp_enqueue_style('mptbm_style', MPTBM_PLUGIN_URL . '/assets/frontend/mptbm_style.css', array(), $this->asset_ver('assets/frontend/mptbm_style.css'));
-            wp_enqueue_script('mptbm_script', MPTBM_PLUGIN_URL . '/assets/frontend/mptbm_script.js', array('jquery'), $this->asset_ver('assets/frontend/mptbm_script.js'), true);
-            wp_enqueue_script('mptbm_registration', MPTBM_PLUGIN_URL . '/assets/frontend/mptbm_registration.js', array('jquery'), $this->asset_ver('assets/frontend/mptbm_registration.js'), true);
-            wp_enqueue_style('mptbm_registration', MPTBM_PLUGIN_URL . '/assets/frontend/mptbm_registration.css', array(), $this->asset_ver('assets/frontend/mptbm_registration.css'));
+            wp_enqueue_style('mptbm_style', MPTBM_PLUGIN_URL . '/assets/frontend/mptbm_style.css', array(), time());
+
+            // Single vehicle page (templates/themes/default.php) has its own,
+            // fairly large stylesheet - only load it there rather than on every
+            // frontend page.
+            if (is_singular(MPTBM_Function::get_cpt())) {
+                wp_enqueue_style('mptbm_vehicle_page', MPTBM_PLUGIN_URL . '/assets/frontend/mptbm_vehicle_page.css', array('mptbm_style'), time());
+            }
+            wp_enqueue_script('mptbm_script', MPTBM_PLUGIN_URL . '/assets/frontend/mptbm_script.js', array('jquery'), time(), true);
+            wp_enqueue_script('mptbm_registration', MPTBM_PLUGIN_URL . '/assets/frontend/mptbm_registration.js', array('jquery', 'flatpickr'), time(), true);
+            wp_enqueue_style('mptbm_registration', MPTBM_PLUGIN_URL . '/assets/frontend/mptbm_registration.css', array(), time());
 			
 			// Localize script for AJAX
 			wp_localize_script('mptbm_registration', 'mptbm_ajax', array(
@@ -266,18 +267,10 @@ if (!class_exists('MPTBM_Dependencies')) {
 				return;
 			}
 
-			$client_ip = isset($_SERVER['REMOTE_ADDR']) ? sanitize_text_field(wp_unslash($_SERVER['REMOTE_ADDR'])) : 'unknown';
-			$rate_key = 'mptbm_osm_rate_' . md5($client_ip);
-			$rate = (int) get_transient($rate_key);
-			if ($rate >= 30) {
-				wp_send_json_error('Too many searches. Please wait and try again.', 429);
-			}
-			set_transient($rate_key, $rate + 1, 5 * MINUTE_IN_SECONDS);
-			
 			// Get country restriction settings
 			$restrict_to_country = MP_Global_Function::get_settings('mptbm_map_api_settings', 'mp_country_restriction', 'no');
 			$country_code = MP_Global_Function::get_settings('mptbm_map_api_settings', 'mp_country', 'BD');
-			
+
 			// Build search parameters
 			$search_params = array(
 				'q' => $query,
@@ -289,7 +282,19 @@ if (!class_exists('MPTBM_Dependencies')) {
 			if (is_array($cached_results)) {
 				wp_send_json_success($cached_results);
 			}
-			
+
+			// Rate-limit only actual outbound Photon requests (cache hits above
+			// never leave the server, so they shouldn't spend this budget) -
+			// otherwise re-typing/correcting a query, or another visitor having
+			// already searched the same place, silently burns through it.
+			$client_ip = isset($_SERVER['REMOTE_ADDR']) ? sanitize_text_field(wp_unslash($_SERVER['REMOTE_ADDR'])) : 'unknown';
+			$rate_key = 'mptbm_osm_rate_' . md5($client_ip);
+			$rate = (int) get_transient($rate_key);
+			if ($rate >= 60) {
+				wp_send_json_error('Too many searches. Please wait and try again.', 429);
+			}
+			set_transient($rate_key, $rate + 1, 5 * MINUTE_IN_SECONDS);
+
 			// Add country restriction if enabled
 			if ($restrict_to_country === 'yes' && !empty($country_code)) {
 				// For Bangladesh, we'll rely on server-side filtering since osm_tag might be too restrictive
@@ -397,13 +402,22 @@ if (!class_exists('MPTBM_Dependencies')) {
 						}
 					}
 					
-					// Build display name from properties
+					// Build display name from properties. Name + city is enough to
+					// identify a pickup/drop-off for a service operating in one
+					// city/country - state and country repeated on every result
+					// made addresses needlessly long everywhere they're shown
+					// (summary, admin bookings list, order emails, ...). Only
+					// fall back to the broader state/country if neither a name
+					// nor a city came back, so a legitimately resolvable rural
+					// result still shows something instead of "Unknown Location".
 					$name_parts = array();
 					if (!empty($properties['name'])) $name_parts[] = $properties['name'];
 					if (!empty($properties['city'])) $name_parts[] = $properties['city'];
-					if (!empty($properties['state'])) $name_parts[] = $properties['state'];
-					if (!empty($properties['country'])) $name_parts[] = $properties['country'];
-					
+					if (empty($name_parts)) {
+						if (!empty($properties['state'])) $name_parts[] = $properties['state'];
+						if (!empty($properties['country'])) $name_parts[] = $properties['country'];
+					}
+
 					$display_name = !empty($name_parts) ? implode(', ', $name_parts) : 'Unknown Location';
 					
 					// Photon uses [lon, lat] format, we need to convert to lat/lon

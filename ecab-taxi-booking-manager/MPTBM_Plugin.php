@@ -3,7 +3,7 @@
  * Plugin Name: E-cab Taxi Booking Manager for Woocommerce
  * Plugin URI: https://wordpress.org/plugins/ecab-taxi-booking-manager/
  * Description: A Complete Transportation Solution for WordPress by MagePeople.
- * Version: 2.0.5
+ * Version: 2.0.6
  * Author: MagePeople Team
  * Author URI: http://www.mage-people.com/
  * License: GPL v2 or later
@@ -26,7 +26,9 @@ if (!class_exists('MPTBM_Plugin')) {
             add_action('admin_init', array($this, 'wptbm_assign_template_to_page'));
 			add_action('init', array(__CLASS__, 'maybe_upgrade_security_capabilities'), 1);
 			add_action('init', array(__CLASS__, 'maybe_upgrade_api_schema'), 2);
+			add_action('init', array(__CLASS__, 'register_driver_role'), 3);
             add_action('wp_enqueue_scripts', array($this, 'enqueue_frontend_assets'));
+            add_filter('body_class', array($this, 'add_body_class'));
             
             // Hook to automatically assign template when settings are saved
             add_action('update_option_mp_global_settings', array($this, 'auto_assign_template_on_settings_save'), 10, 3);
@@ -51,7 +53,7 @@ if (!class_exists('MPTBM_Plugin')) {
                 // define('MPTBM_PLUGIN_DATA', get_plugin_data(__FILE__));
             }
             if (!defined('MPTBM_PLUGIN_VERSION')) {
-                define('MPTBM_PLUGIN_VERSION', '2.0.4');
+                define('MPTBM_PLUGIN_VERSION', '2.0.5');
             }
 
             // Create required directories if they don't exist
@@ -103,6 +105,12 @@ if (!class_exists('MPTBM_Plugin')) {
             if ($plugin == plugin_basename(__FILE__) && ! isset($_GET['activate-multi'])) {
                 exit(wp_redirect(admin_url('edit.php?post_type=mptbm_rent&page=mptbm_transportation_lists')));
             }
+        }
+
+        public function add_body_class($classes)
+        {
+            $classes[] = 'ecab-taxi';
+            return $classes;
         }
 
         public static function on_activation_page_create(): void
@@ -193,6 +201,19 @@ if (!class_exists('MPTBM_Plugin')) {
 			}
 		}
 
+		public static function register_driver_role(): void
+		{
+			if (!get_role('mptbm_driver_role')) {
+				add_role(
+					'mptbm_driver_role',
+					__('Driver', 'ecab-taxi-booking-manager'),
+					array(
+						'read' => true,
+					)
+				);
+			}
+		}
+
 		public static function maybe_upgrade_api_schema(): void
 		{
 			if ('2' !== get_option('mptbm_api_schema_version')) {
@@ -261,6 +282,9 @@ if (!class_exists('MPTBM_Plugin')) {
 
 			// Restrict transportation configuration to trusted store managers.
 			self::grant_management_capabilities();
+
+			// Drivers can be assigned to transportation units in the free plugin.
+			self::register_driver_role();
             
             // Flush rewrite rules
             flush_rewrite_rules();
@@ -511,7 +535,7 @@ if (!class_exists('MPTBM_Plugin')) {
         }
 
         /**
-         * Dequeue CSS that overrides our jQuery UI datepicker styling.
+         * Dequeue CSS that may conflict with our flatpickr calendar styling.
          */
         public function dequeue_conflicting_styles() {
             // Handle used by WP Travel Engine for jQuery UI Datepicker theme.
@@ -519,15 +543,6 @@ if (!class_exists('MPTBM_Plugin')) {
 
             // WTE bundles many generic styles (including .ui-datepicker) into this handle.
             wp_dequeue_style('wp-travel-engine');
-
-            // Ensure our jQuery UI stylesheet prints after others for higher cascade priority.
-            if (wp_style_is('mp_jquery_ui', 'enqueued')) {
-                wp_dequeue_style('mp_jquery_ui');
-                wp_enqueue_style('mp_jquery_ui', MPTBM_PLUGIN_URL . '/mp_global/assets/jquery-ui.min.css', array(), '1.13.2');
-            }
-
-            // If any theme or plugin enqueues their own jQuery UI base with this handle,
-            // leave it as-is. Our plugin already enqueues its own scoped UI CSS as 'mp_jquery_ui'.
         }
     }
 

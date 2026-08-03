@@ -39,6 +39,11 @@
 
 			require_once MPTBM_PLUGIN_DIR . '/Admin/MPTBM_Transportation.php';
 			require_once MPTBM_PLUGIN_DIR . '/Admin/MPTBM_Rent_Custom_Editor.php';
+			require_once MPTBM_PLUGIN_DIR . '/Admin/MPTBM_Admin_Shell.php';
+			require_once MPTBM_PLUGIN_DIR . '/Admin/MPTBM_Service_Status_Manager.php';
+			require_once MPTBM_PLUGIN_DIR . '/Admin/MPTBM_Locations_Manager.php';
+			require_once MPTBM_PLUGIN_DIR . '/Admin/MPTBM_Extra_Services_Manager.php';
+			require_once MPTBM_PLUGIN_DIR . '/Admin/MPTBM_Operation_Areas_Manager.php';
 			// Limited "Bookings" list (upgrade teaser). Self-instantiates; internally stands
 			// down when the Pro plugin is active so the Pro unified list takes over.
 			require_once MPTBM_PLUGIN_DIR . '/Admin/MPTBM_Booking_List_Free.php';
@@ -63,9 +68,6 @@
 				// the Payments tab renders in both WC and standalone (no-WC) modes.
 				require_once MPTBM_PLUGIN_DIR . '/Admin/MPTBM_WC_Payment_Manager.php';
 				require_once MPTBM_PLUGIN_DIR . '/Admin/settings/MPTBM_Payment_Settings.php';
-				require_once MPTBM_PLUGIN_DIR . '/Admin/MPTBM_Payment_Notice.php';
-				// Standalone, dismissible Pro upsell (free build only).
-				require_once MPTBM_PLUGIN_DIR . '/Admin/MPTBM_Pro_Features_Notice.php';
 				//****************Woocommerce Checkout*********************** */
 				// WooCommerce checkout integration only loads when WooCommerce is active.
 				if (MP_Global_Function::check_woocommerce() == 1) {

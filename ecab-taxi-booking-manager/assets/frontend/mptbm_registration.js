@@ -1,8 +1,54 @@
+// The browser's back/forward cache (bfcache) can restore this page exactly
+// as it was in memory -- DOM, JS variables, everything -- without re-running
+// a request. That includes whatever search results/checkout markup were
+// injected via AJAX, with the mptbm_add_to_cart_nonce that was valid *then*.
+// Clicking Book Now on that restored page resubmits stale state (the earlier
+// Book Now click already emptied/rebuilt the cart), which can fail with no
+// visible error. event.persisted is true only when the page came from
+// bfcache, not a normal load -- this file is enqueued on every frontend page
+// (not just the booking one), so the reload is gated on the injected search-
+// result/checkout markup actually being present, rather than firing site-wide
+// on every back-navigation.
+window.addEventListener('pageshow', function (event) {
+    if (event.persisted && document.querySelector('.mptbm_map_search_result, .mptbm_order_summary')) {
+        window.location.reload();
+    }
+});
+
 let mptbm_map;
 let mptbm_map_window;
 var mptbm_start_marker = null;
 var mptbm_end_marker = null;
 var mptbm_extra_marker = null;
+
+// Collects the multi-row "Add Extra Stop" values (get_details.php's
+// .mptbm_extra_stops_wrapper) for the search-submit AJAX payloads below.
+// The legacy single #mptbm_map_extra_stop_place input no longer exists in
+// the markup (removed in favor of these rows), so this is the only working
+// source of extra-stop data - without it, jQuery's parent.find('#mptbm_map_extra_stop_place')
+// always resolves to an empty jQuery object and every request silently
+// submitted zero stops regardless of what the customer added.
+function mptbm_collect_extra_stop_places($scope) {
+    var places = [];
+    ($scope || jQuery(document)).find('.mptbm_extra_stop_place_input').each(function () {
+        var val = jQuery(this).val();
+        if (val) {
+            places.push(val);
+        }
+    });
+    return places;
+}
+
+function mptbm_collect_extra_stop_coordinates($scope) {
+    var coords = [];
+    ($scope || jQuery(document)).find('.mptbm_extra_stop_coords').each(function () {
+        var val = jQuery(this).val();
+        if (val) {
+            coords.push(val);
+        }
+    });
+    return coords;
+}
 
 // OpenStreetMap variables
 var mptbm_osm_map = null;
@@ -10,8 +56,12 @@ var mptbm_osm_markers = [];
 var mptbm_osm_route = null;
 var mptbm_osm_start_marker = null;
 var mptbm_osm_end_marker = null;
-var mptbm_osm_extra_marker = null; // kept for backward compat, unused once multi-stop rows exist
-var mptbm_osm_extra_markers = []; // one marker per dynamic extra-stop row, in order
+var mptbm_osm_extra_marker = null;
+
+// Per-pageload cache of address-search results, keyed by lowercased query
+// text -- re-typing something already searched (or the other field
+// matching the same text) resolves instantly with no network round trip.
+var mptbm_osm_search_cache = {};
 
 // Base Price global variables
 var mptbm_base_to_pickup_data = { distance: 0, duration: 0 };
@@ -181,7 +231,8 @@ function showLocationError(element, message) {
     errorDiv.className = 'mptbm-location-error';
     errorDiv.style.color = '#dc3545';
     errorDiv.style.fontSize = '12px';
-    errorDiv.style.marginTop = '5px';
+    errorDiv.style.marginTop = '8px';
+    errorDiv.style.marginBottom = '10px';
     errorDiv.textContent = message;
 
     // Insert error message after the input
@@ -349,15 +400,31 @@ function mptbm_set_cookie_distance_duration(start_place, end_place) {
     // We need at least start_place and either end_place OR extra_stop
     var extra_stop = jQuery('#mptbm_map_extra_stop_place').val();
 
-    if (start_place && (end_place || extra_stop)) {
+    // Multi-row "Add Extra Stop" inputs (get_details.php's
+    // .mptbm_extra_stops_wrapper) - read fresh each call, in DOM order, so
+    // added/edited/removed rows are always reflected without needing every
+    // caller of this function to be updated. Google's Directions API
+    // geocodes plain address text itself, so the input's value is enough -
+    // no need to touch the paired coordinate field here.
+    var multi_stop_addresses = [];
+    jQuery('.mptbm_extra_stop_place_input').each(function () {
+        var val = jQuery(this).val();
+        if (val) {
+            multi_stop_addresses.push(val);
+        }
+    });
+
+    if (start_place && (end_place || extra_stop || multi_stop_addresses.length)) {
         var directionsService = new google.maps.DirectionsService();
         var directionsRenderer = new google.maps.DirectionsRenderer();
         directionsRenderer.setMap(mptbm_map);
 
-        // If dropoff is not set but extra stop is, use extra stop as temporary destination
-        var actualDestination = end_place || extra_stop;
-        var useExtraAsWaypoint = end_place && extra_stop; // Only use as waypoint if we have both
-
+        // If dropoff isn't set yet, fall back to the last known stop (a
+        // multi-row stop if any exist, otherwise the legacy single extra
+        // stop) as a temporary destination so a route still draws.
+        var lastMultiStop = multi_stop_addresses.length ? multi_stop_addresses[multi_stop_addresses.length - 1] : '';
+        var actualDestination = end_place || lastMultiStop || extra_stop;
+        var useExtraAsWaypoint = (end_place || multi_stop_addresses.length) && extra_stop; // Only use legacy extra as waypoint if it's not the destination
 
         var waypoints = [];
         if (useExtraAsWaypoint) {
@@ -366,6 +433,17 @@ function mptbm_set_cookie_distance_duration(start_place, end_place) {
                 stopover: true
             });
         }
+        multi_stop_addresses.forEach(function (address, index) {
+            // The last multi-stop is being used as the temporary destination
+            // above when dropoff isn't set yet - don't also list it as a waypoint.
+            if (!end_place && index === multi_stop_addresses.length - 1) {
+                return;
+            }
+            waypoints.push({
+                location: address,
+                stopover: true
+            });
+        });
 
 
         var request = {
@@ -475,6 +553,7 @@ function mptbm_set_cookie_distance_duration(start_place, end_place) {
                     jQuery(".mptbm_total_distance").html(distance_text);
                     jQuery(".mptbm_total_time").html(duration_text);
                     jQuery(".mptbm_distance_time").slideDown("fast");
+                    mptbm_update_fixed_hours_warning();
 
 
                 } catch (error) {
@@ -595,17 +674,34 @@ function mptbmCreateMarker(place) {
         }
     });
 }
+// Every tab's template (Hourly, Distance, ...) renders its own
+// id="mptbm_map_area" div. Once a second tab has been loaded via AJAX, the
+// DOM holds more than one element sharing that id, so a bare
+// getElementById/querySelector always resolves to whichever one appears
+// first in the DOM -- typically the original (now hidden) tab, not the one
+// actually on screen. Scope the lookup to the visible tab when tabs exist,
+// and fall back to a bare lookup for the tabless [mptbm_booking] shortcode.
+function mptbm_get_current_map_area() {
+    var scoped = document.querySelector('.mptb-tab-content.current #mptbm_map_area');
+    return scoped || document.getElementById('mptbm_map_area');
+}
+
+function mptbm_get_current_map_wrap() {
+    var scoped = document.querySelector('.mptb-tab-content.current .mptbm_map_area');
+    return scoped || document.querySelector('.mptbm_map_area');
+}
+
 function mptbm_map_area_init() {
 
     // Check if map container exists and is visible before initializing
-    var mapContainer = document.getElementById("mptbm_map_area");
+    var mapContainer = mptbm_get_current_map_area();
     if (!mapContainer) {
         console.warn("[Map Init] Map container #mptbm_map_area not found. Skipping map initialization.");
         return false;
     }
 
     // Check if the map container is visible (not hidden by CSS)
-    var mapArea = document.querySelector('.mptbm_map_area');
+    var mapArea = mptbm_get_current_map_wrap();
     if (mapArea && mapArea.style.display === 'none') {
         // If map is hidden, we still want to initialize address search for OSM
         var mapType = document.getElementById('mptbm_map_type');
@@ -634,6 +730,22 @@ function mptbm_map_area_init() {
     }
 }
 
+// Safety net called right before the first marker is placed: if the map
+// somehow isn't up yet (e.g. its container was hidden when
+// mptbm_map_area_init() ran), build it lazily now instead of silently
+// dropping the marker. A no-op once the map already exists.
+function mptbm_ensure_osm_map_ready() {
+    if (mptbm_osm_map) {
+        return true;
+    }
+    var mapContainer = mptbm_get_current_map_area();
+    if (!mapContainer) {
+        return false;
+    }
+    mapContainer.innerHTML = '';
+    return mptbm_init_osm_map();
+}
+
 function mptbm_init_osm_map() {
 
     if (typeof L === 'undefined') {
@@ -641,7 +753,7 @@ function mptbm_init_osm_map() {
     }
 
     // Check if map container exists
-    var mapContainer = document.getElementById("mptbm_map_area");
+    var mapContainer = mptbm_get_current_map_area();
     if (!mapContainer) {
         return false;
     }
@@ -656,7 +768,6 @@ function mptbm_init_osm_map() {
             mptbm_osm_start_marker = null;
             mptbm_osm_end_marker = null;
             mptbm_osm_extra_marker = null;
-            mptbm_osm_extra_markers = [];
         } catch (e) {
             console.log("[OSM] Error removing map:", e);
         }
@@ -667,8 +778,11 @@ function mptbm_init_osm_map() {
     var defaultLat = (typeof mptbm_default_lat !== 'undefined') ? mptbm_default_lat : 40.7128;
     var defaultLng = (typeof mptbm_default_lng !== 'undefined') ? mptbm_default_lng : -74.0060;
 
-    // Initialize OpenStreetMap with configured coordinates
-    mptbm_osm_map = L.map('mptbm_map_area').setView([defaultLat, defaultLng], 10);
+    // Initialize OpenStreetMap with configured coordinates. Passed as the
+    // resolved element (not the 'mptbm_map_area' id string) since that id is
+    // duplicated across tabs -- Leaflet would otherwise resolve it via its
+    // own getElementById and land on the wrong tab's div.
+    mptbm_osm_map = L.map(mapContainer).setView([defaultLat, defaultLng], 10);
 
     // Add OpenStreetMap tiles
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -699,10 +813,6 @@ function mptbm_init_osm_address_search() {
     if (endInput) {
         mptbm_setup_osm_autocomplete(endInput, 'end');
     }
-    // Multi-stop rows are added/removed dynamically - set up autocomplete on whichever exist now.
-    document.querySelectorAll('.mptbm_extra_stop_place_input').forEach(function (stopInput) {
-        mptbm_init_extra_stop_autocomplete(stopInput);
-    });
     var extraInput = document.getElementById('mptbm_map_extra_stop_place');
     if (extraInput) {
         mptbm_setup_osm_autocomplete(extraInput, 'extra');
@@ -752,7 +862,7 @@ function mptbm_setup_osm_autocomplete(input, type) {
     var resultsContainer = document.createElement('div');
     resultsContainer.className = 'mptbm-osm-autocomplete';
     resultsContainer.setAttribute('data-autocomplete-type', type);
-    resultsContainer.style.cssText = 'position: fixed; font-size:16px; background: white; border: 1px solid #ddd; border-radius: 4px; max-height: 200px; overflow-y: auto; z-index: 99999 !important; display: none; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);';
+    resultsContainer.style.cssText = 'position: fixed; box-sizing: border-box; font-size:14px; background: #fff; border: 1px solid #e7eaf0; border-radius: 14px; max-height: 240px; overflow-y: auto; z-index: 99999 !important; display: none; box-shadow: 0 10px 30px rgba(15, 23, 42, 0.12), 0 2px 8px rgba(15, 23, 42, 0.06); padding: 6px;';
 
     // Append to body to avoid parent overflow issues
     document.body.appendChild(resultsContainer);
@@ -821,17 +931,152 @@ function mptbm_setup_osm_autocomplete(input, type) {
     };
 }
 
-function mptbm_search_osm_address(query, container, input, type, expectedQuery, autocompleteState) {
-    container.innerHTML = '<div style="padding: 10px; text-align: center; color: #666;">Searching...</div>';
+// Bangladesh-specific fallback matching, ported from the old server-side
+// proxy (MPTBM_Dependencies::osm_search_proxy) -- Photon's country field is
+// sometimes empty for BD results, so city/state name also counts as a match.
+var MPTBM_BD_CITIES = ['DHAKA', 'CHITTAGONG', 'SYLHET', 'RAJSHAHI', 'KHULNA', 'BARISAL', 'RANGPUR', 'COMILLA', 'NARAYANGANJ', 'GAZIPUR'];
+var MPTBM_BD_STATES = ['DHAKA', 'CHITTAGONG', 'SYLHET', 'RAJSHAHI', 'KHULNA', 'BARISAL', 'RANGPUR', 'DIVISION'];
+
+// Same GeoJSON -> {display_name, lat, lon} shape and country filtering the
+// PHP proxy used to do server-side, ported 1:1 so behavior is unchanged now
+// that the call happens directly from the browser.
+function mptbm_transform_photon_results(geojson, restrictToCountry, countryCode) {
+    var results = [];
+    if (!geojson || !Array.isArray(geojson.features)) {
+        return results;
+    }
+
+    geojson.features.forEach(function (feature) {
+        var props = feature.properties || {};
+        var coords = (feature.geometry && feature.geometry.coordinates) || [];
+
+        if (restrictToCountry && countryCode) {
+            var featureCountry = (props.countrycode || '').toUpperCase();
+            var featureCountryName = (props.country || '').toUpperCase();
+            var featureState = (props.state || '').toUpperCase();
+            var featureCity = (props.city || '').toUpperCase();
+            var matches = false;
+
+            if (featureCountry && featureCountry === countryCode) {
+                matches = true;
+            }
+
+            if (!matches && countryCode === 'BD') {
+                if (featureCountryName === 'BANGLADESH' || featureCountryName === 'BD') {
+                    matches = true;
+                }
+                if (!matches && MPTBM_BD_CITIES.indexOf(featureCity) !== -1) {
+                    matches = true;
+                } else if (!matches && MPTBM_BD_STATES.indexOf(featureState) !== -1) {
+                    matches = true;
+                }
+            }
+
+            // No country info at all on this result -- allow it through
+            // rather than silently dropping it.
+            if (!featureCountry && !featureCountryName && !featureCity && !featureState) {
+                matches = true;
+            }
+
+            if (!matches) {
+                return;
+            }
+        }
+
+        // Place name + city is enough to identify a pickup/drop-off for a
+        // service operating in one city/country - state and country were
+        // repeated on every single result (e.g. "..., Dhaka Division,
+        // Bangladesh") and made addresses needlessly long throughout the
+        // booking flow (summary, admin bookings list, order emails, ...).
+        // Only fall back to the broader state/country if neither a specific
+        // name nor a city came back at all, so a legitimately resolvable
+        // rural result still shows something instead of "Unknown Location".
+        var nameParts = [props.name, props.city].filter(Boolean);
+        if (!nameParts.length) {
+            nameParts = [props.state, props.country].filter(Boolean);
+        }
+
+        results.push({
+            display_name: nameParts.length ? nameParts.join(', ') : 'Unknown Location',
+            lat: coords.length > 1 ? coords[1] : 0,
+            lon: coords.length > 0 ? coords[0] : 0
+        });
+    });
+
+    return results;
+}
+
+function mptbm_render_osm_search_results(results, container, input, type) {
+    container.innerHTML = '';
+
+    if (!results || results.length === 0) {
+        container.innerHTML = '<div style="padding: 9px 12px; box-sizing: border-box; display: flex; align-items: center; justify-content: center; text-align: center; color: #94a3b8; font-size: 13px; font-weight: 600;">No results found</div>';
+        container.style.display = 'block';
+        return;
+    }
+
+    results.forEach(function (result) {
+        var item = document.createElement('div');
+        item.style.cssText = 'display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px; margin: 2px 0; cursor: pointer; border-radius: 10px; color: #0f172a; font-size: 13.5px; font-weight: 500; line-height: 1.4; transition: background-color .15s ease;';
+
+        var icon = document.createElement('i');
+        icon.className = 'fas fa-map-marker-alt';
+        icon.style.cssText = 'flex: 0 0 auto; width: 14px; margin-top: 2px; color: #94a3b8; font-size: 13px;';
+
+        var text = document.createElement('span');
+        text.textContent = result.display_name;
+        text.style.cssText = 'flex: 1 1 auto; min-width: 0;';
+
+        item.appendChild(icon);
+        item.appendChild(text);
+
+        item.addEventListener('click', function () {
+            input.value = result.display_name;
+            container.style.display = 'none';
+            mptbm_handle_osm_address_selection(result, type);
+        });
+
+        item.addEventListener('mouseenter', function () {
+            this.style.backgroundColor = '#f1f4f9';
+        });
+
+        item.addEventListener('mouseleave', function () {
+            this.style.backgroundColor = 'transparent';
+        });
+
+        container.appendChild(item);
+    });
+
+    container.style.display = 'block';
+}
+
+// Calls Photon directly from the browser instead of proxying through
+// admin-ajax.php. The proxy added a full WordPress bootstrap plus an
+// outbound request from the server itself on every keystroke search --
+// on hosts where the server's own outbound connection is slow (the same
+// class of issue as a cURL timeout to any other external API), that hop
+// alone could make autocomplete take several seconds per query. Calling
+// Photon straight from the visitor's browser removes that hop entirely;
+// Photon's public API already supports CORS for exactly this use.
+function mptbm_search_osm_address(query, container, input, type, expectedQuery, autocompleteState, retryCount) {
+    retryCount = retryCount || 0;
+    var cacheKey = query.toLowerCase();
+    var cached = mptbm_osm_search_cache[cacheKey];
+    if (cached) {
+        mptbm_render_osm_search_results(cached, container, input, type);
+        return;
+    }
+
+    container.innerHTML = '<div style="padding: 9px 12px; box-sizing: border-box; display: flex; align-items: center; justify-content: center; text-align: center; color: #94a3b8; font-size: 13px; font-weight: 600;">Searching&hellip;</div>';
     container.style.display = 'block';
 
-    // Use WordPress AJAX proxy
-    var body = new URLSearchParams();
-    body.append('action', 'mptbm_osm_search');
-    body.append('nonce', mptbm_ajax.osm_nonce);
-    body.append('q', query);
+    var restrictEl = document.getElementById('mptbm_restrict_search_country');
+    var countryEl = document.getElementById('mptbm_country');
+    var restrictToCountry = !!restrictEl && restrictEl.value === 'yes';
+    var countryCode = (countryEl && countryEl.value ? countryEl.value : '').toUpperCase();
 
     var abortController = null;
+    var timeoutId = null;
     if (autocompleteState && typeof AbortController !== 'undefined') {
         if (autocompleteState.abortController) {
             autocompleteState.abortController.abort();
@@ -839,22 +1084,25 @@ function mptbm_search_osm_address(query, container, input, type, expectedQuery, 
 
         abortController = new AbortController();
         autocompleteState.abortController = abortController;
+        // Photon is a shared public instance -- bound the wait instead of
+        // leaving "Searching..." on screen indefinitely if it stalls.
+        timeoutId = setTimeout(function () {
+            abortController.abort();
+        }, 8000);
     }
 
-    fetch(mptbm_ajax.ajax_url, {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/x-www-form-urlencoded',
-            'X-Requested-With': 'XMLHttpRequest'
-        },
-        body: body,
-        credentials: 'same-origin',
+    var url = 'https://photon.komoot.io/api/?q=' + encodeURIComponent(query) + '&limit=5&lang=en';
+
+    fetch(url, {
         signal: abortController ? abortController.signal : undefined
     })
-        .then(response => {
+        .then(function (response) {
             return response.json();
         })
-        .then(response => {
+        .then(function (geojson) {
+            if (timeoutId) {
+                clearTimeout(timeoutId);
+            }
             if (autocompleteState && autocompleteState.abortController === abortController) {
                 autocompleteState.abortController = null;
             }
@@ -865,48 +1113,14 @@ function mptbm_search_osm_address(query, container, input, type, expectedQuery, 
                 return;
             }
 
-            container.innerHTML = '';
-
-            if (!response.success) {
-                container.innerHTML = '<div style="padding: 10px; color: #f00;">Error: ' + response.data + '</div>';
-                container.style.display = 'block';
-                return;
-            }
-
-            if (!response.data || response.data.length === 0) {
-                container.innerHTML = '<div style="padding: 10px; color: #666;">No results found</div>';
-                container.style.display = 'block';
-                return;
-            }
-
-            var data = response.data;
-
-            data.forEach(function (result) {
-                var item = document.createElement('div');
-                item.style.cssText = 'padding: 10px; cursor: pointer; border-bottom: 1px solid #eee; background-color: white;';
-                item.textContent = result.display_name;
-
-                item.addEventListener('click', function () {
-                    input.value = result.display_name;
-                    container.style.display = 'none';
-                    mptbm_handle_osm_address_selection(result, type, input);
-                });
-
-                item.addEventListener('mouseenter', function () {
-                    this.style.backgroundColor = '#f5f5f5';
-                });
-
-                item.addEventListener('mouseleave', function () {
-                    this.style.backgroundColor = 'white';
-                });
-
-                container.appendChild(item);
-            });
-
-            // Ensure container is visible and positioned
-            container.style.display = 'block';
+            var results = mptbm_transform_photon_results(geojson, restrictToCountry, countryCode);
+            mptbm_osm_search_cache[cacheKey] = results;
+            mptbm_render_osm_search_results(results, container, input, type);
         })
-        .catch(error => {
+        .catch(function (error) {
+            if (timeoutId) {
+                clearTimeout(timeoutId);
+            }
             if (autocompleteState && autocompleteState.abortController === abortController) {
                 autocompleteState.abortController = null;
             }
@@ -915,38 +1129,43 @@ function mptbm_search_osm_address(query, container, input, type, expectedQuery, 
                 return;
             }
 
+            // fetch() collapses every network-layer failure (DNS hiccup, a
+            // VPN/Wi-Fi adapter flapping mid-request -- ERR_NETWORK_CHANGED,
+            // a dropped connection, ...) into this same generic "Failed to
+            // fetch" TypeError with no way to tell them apart. Most of those
+            // are transient and gone a moment later, so retry once
+            // automatically before bothering the visitor with an error --
+            // only if they haven't since typed something else.
             console.error('[OSM Search] Fetch error:', error);
-            container.innerHTML = '<div style="padding: 10px; color: #f00;">Search failed. Please try again.</div>';
+            if (retryCount < 1 && input.value.trim() === expectedQuery) {
+                setTimeout(function () {
+                    if (input.value.trim() === expectedQuery) {
+                        mptbm_search_osm_address(query, container, input, type, expectedQuery, autocompleteState, retryCount + 1);
+                    }
+                }, 700);
+                return;
+            }
+
+            container.innerHTML = '<div style="padding: 9px 12px; box-sizing: border-box; display: flex; align-items: center; justify-content: center; text-align: center; color: #dc2626; font-size: 13px; font-weight: 600;">Search failed. Please try again.</div>';
             container.style.display = 'block';
         });
 }
 
-// Sets up autocomplete on one extra-stop row's input, giving it its own unique
-// tracked marker slot ('extra_<n>') so multiple stop rows don't clobber each other.
-function mptbm_init_extra_stop_autocomplete(stopInput) {
-    var $row = jQuery(stopInput).closest('.mptbm_extra_stop_row');
-    var idx = $row.data('stop-index');
-    if (idx === undefined || idx === null) {
-        idx = mptbm_osm_extra_markers.length;
-        $row.attr('data-stop-index', idx).data('stop-index', idx);
-    }
-    mptbm_setup_osm_autocomplete(stopInput, 'extra_' + idx);
-}
-
-function mptbm_handle_osm_address_selection(address, type, input) {
+function mptbm_handle_osm_address_selection(address, type) {
     var lat = parseFloat(address.lat);
     var lng = parseFloat(address.lon);
     var price_based = jQuery('[name="mptbm_price_based"]').val();
-    var isExtraStop = type.indexOf('extra_') === 0;
-    var stopIndex = isExtraStop ? parseInt(type.split('_')[1], 10) : -1;
+
+    // First address picked: swap the idle Google preview for the real map.
+    mptbm_ensure_osm_map_ready();
 
     // Remove existing marker for this type
     if (type === 'start' && mptbm_osm_start_marker) {
         mptbm_osm_map.removeLayer(mptbm_osm_start_marker);
     } else if (type === 'end' && mptbm_osm_end_marker) {
         mptbm_osm_map.removeLayer(mptbm_osm_end_marker);
-    } else if (isExtraStop && mptbm_osm_extra_markers[stopIndex]) {
-        mptbm_osm_map.removeLayer(mptbm_osm_extra_markers[stopIndex]);
+    } else if (type === 'extra' && mptbm_osm_extra_marker) {
+        mptbm_osm_map.removeLayer(mptbm_osm_extra_marker);
     }
 
     // Create new marker if map exists
@@ -957,23 +1176,26 @@ function mptbm_handle_osm_address_selection(address, type, input) {
         if (type === 'start') {
             mptbm_osm_start_marker = marker;
             window.mptbm_fixed_zone_start_coords = { latitude: lat, longitude: lng };
+            // Remembers exactly which address text these coordinates belong
+            // to, so the Search button can reuse them instead of re-geocoding
+            // the same text again -- see getCachedOrFreshCoordinates().
+            window.mptbm_osm_start_coords_address = address.display_name;
         } else if (type === 'end') {
             mptbm_osm_end_marker = marker;
             window.mptbm_fixed_zone_end_coords = { latitude: lat, longitude: lng };
-        } else if (isExtraStop) {
-            mptbm_osm_extra_markers[stopIndex] = marker;
-            if (input) {
-                jQuery(input).closest('.mptbm_extra_stop_row').find('.mptbm_extra_stop_coords').val(lat + ',' + lng);
-            }
+            window.mptbm_osm_end_coords_address = address.display_name;
+        } else if (type === 'extra') {
+            mptbm_osm_extra_marker = marker;
         }
 
-        // Calculate distance if we have start marker and either end marker OR any extra stop marker
-        if (mptbm_osm_start_marker && (mptbm_osm_end_marker || mptbm_osm_extra_markers.some(Boolean))) {
+        // Calculate distance if we have start marker and either end marker OR extra marker
+        if (mptbm_osm_start_marker && (mptbm_osm_end_marker || mptbm_osm_extra_marker)) {
             mptbm_calculate_osm_distance();
         }
 
         // Fit map to show all markers
-        var markersToFit = [mptbm_osm_start_marker, mptbm_osm_end_marker].concat(mptbm_osm_extra_markers);
+        var markersToFit = [mptbm_osm_start_marker, mptbm_osm_end_marker];
+        if (mptbm_osm_extra_marker) markersToFit.push(mptbm_osm_extra_marker);
 
         var group = new L.featureGroup(markersToFit.filter(Boolean));
         if (group.getLayers().length > 0) {
@@ -982,30 +1204,134 @@ function mptbm_handle_osm_address_selection(address, type, input) {
     }
 }
 
+// Warn the user when the selected "Select Hours" rental duration is shorter
+// than the estimated drive time for the chosen pickup/drop-off route.
+function mptbm_update_fixed_hours_warning() {
+    var priceBasedEl = document.querySelector('[name="mptbm_price_based"]');
+    if (!priceBasedEl || priceBasedEl.value !== 'fixed_hourly') return;
+
+    var warningEl = document.getElementById('mptbm_fixed_hours_warning');
+    var hoursEl = document.getElementById('mptbm_fixed_hours');
+    var durationEl = document.getElementById('mptbm_calculated_duration');
+    if (!warningEl || !hoursEl || !durationEl) return;
+
+    var durationSeconds = parseFloat(durationEl.value) || 0;
+    var selectedHours = parseInt(hoursEl.value, 10) || 0;
+
+    if (durationSeconds <= 0) {
+        warningEl.style.display = 'none';
+        return;
+    }
+
+    var requiredHours = Math.max(1, Math.ceil(durationSeconds / 3600));
+
+    if (requiredHours > selectedHours) {
+        var totalMinutes = Math.round(durationSeconds / 60);
+        var h = Math.floor(totalMinutes / 60);
+        var m = totalMinutes % 60;
+        var tripTimeText = h > 0 ? (h + 'h' + (m > 0 ? ' ' + m + 'm' : '')) : m + 'm';
+        var hourWord = requiredHours === 1 ? 'hour' : 'hours';
+
+        var textEl = warningEl.querySelector('span');
+        if (textEl) {
+            textEl.textContent = 'Estimated trip time is ~' + tripTimeText + '. Select at least ' + requiredHours + ' ' + hourWord + ' to cover this trip.';
+        }
+        warningEl.style.display = 'flex';
+    } else {
+        warningEl.style.display = 'none';
+    }
+}
+
+jQuery(document).on('mp_change change', '#mptbm_fixed_hours', function () {
+    mptbm_update_fixed_hours_warning();
+});
+
+// Custom-styled dropdown proxy for Transfer Type / Extra Waiting Hours.
+// A real (visually hidden) <select> stays in the DOM so existing behaviour
+// (the Return-date/time collapse toggle, price refresh listeners) keeps
+// working untouched -- clicking a list item just updates that select and
+// fires a native "change" event on it.
+(function ($) {
+    "use strict";
+
+    $(document).on('click', '.mptbm_select_proxy input.formControl', function (e) {
+        e.stopPropagation();
+        var $list = $(this).closest('.mptbm_select_proxy').find('.mp_input_select_list');
+        var isOpen = $list.is(':visible');
+        $('.mptbm_select_proxy .mp_input_select_list').not($list).slideUp(200);
+        $list[isOpen ? 'slideUp' : 'slideDown'](200);
+    });
+
+    $(document).on('click', '.mptbm_select_proxy .mp_input_select_list li', function (e) {
+        e.preventDefault();
+        var $li = $(this);
+        var $wrapper = $li.closest('.mptbm_select_proxy');
+
+        $wrapper.find('input.formControl').val($li.text());
+        $wrapper.find('select.mptbm_proxy_native_select').val($li.data('value')).trigger('change');
+        $wrapper.find('.mp_input_select_list').slideUp(200);
+    });
+
+    $(document).on('click', function (e) {
+        if (!$(e.target).closest('.mptbm_select_proxy').length) {
+            $('.mptbm_select_proxy .mp_input_select_list').slideUp(200);
+        }
+    });
+})(jQuery);
+
 function mptbm_calculate_osm_distance() {
-    // We need at least a start marker and either an end marker OR at least one extra stop marker
-    var hasAnyExtraStop = mptbm_osm_extra_markers.some(Boolean);
-    if (!mptbm_osm_start_marker || (!mptbm_osm_end_marker && !hasAnyExtraStop)) return;
+    // Multi-row "Add Extra Stop" coordinates (get_details.php's
+    // .mptbm_extra_stops_wrapper), read fresh in DOM order so added/edited/
+    // removed rows are always reflected. OSRM needs actual coordinates
+    // (unlike Google's Directions API, which can geocode address text
+    // itself), which is exactly what the paired .mptbm_extra_stop_coords
+    // hidden field stores ("lat,lng") once a suggestion is picked.
+    var multiStopCoords = [];
+    jQuery('.mptbm_extra_stop_coords').each(function () {
+        var val = jQuery(this).val();
+        if (!val) return;
+        var parts = val.split(',');
+        if (parts.length === 2) {
+            var lat = parseFloat(parts[0]);
+            var lng = parseFloat(parts[1]);
+            if (!isNaN(lat) && !isNaN(lng)) {
+                multiStopCoords.push({ lat: lat, lng: lng });
+            }
+        }
+    });
+
+    // We need at least start marker and either end marker, extra marker, or a multi-stop
+    if (!mptbm_osm_start_marker || (!mptbm_osm_end_marker && !mptbm_osm_extra_marker && !multiStopCoords.length)) return;
 
     var startLatLng = mptbm_osm_start_marker.getLatLng();
 
-    // Use end marker if available, otherwise use the last extra stop marker as the destination
-    var lastExtraMarker = mptbm_osm_extra_markers.filter(Boolean).slice(-1)[0];
-    var actualEndMarker = mptbm_osm_end_marker || lastExtraMarker;
-    var endLatLng = actualEndMarker.getLatLng();
+    // Use end marker if available; otherwise fall back to the last known
+    // stop (a multi-row stop if any exist, else the legacy single extra
+    // marker) as a temporary destination so a route still draws.
+    var endLatLng;
+    if (mptbm_osm_end_marker) {
+        endLatLng = mptbm_osm_end_marker.getLatLng();
+    } else if (multiStopCoords.length) {
+        var lastStop = multiStopCoords.pop();
+        endLatLng = L.latLng(lastStop.lat, lastStop.lng);
+    } else {
+        endLatLng = mptbm_osm_extra_marker.getLatLng();
+    }
 
-    // If we have a real dropoff AND extra stops, route through all of them in order first
-    var useExtraAsWaypoint = mptbm_osm_end_marker && hasAnyExtraStop;
+    // Determine if we should use the legacy single extra marker as a
+    // waypoint (only if it isn't itself being used as the destination above)
+    var useExtraAsWaypoint = (mptbm_osm_end_marker || multiStopCoords.length) && mptbm_osm_extra_marker;
 
     var urlCoords = startLatLng.lng + ',' + startLatLng.lat;
 
     if (useExtraAsWaypoint) {
-        mptbm_osm_extra_markers.forEach(function (extraMarker) {
-            if (!extraMarker) return;
-            var extraLatLng = extraMarker.getLatLng();
-            urlCoords += ';' + extraLatLng.lng + ',' + extraLatLng.lat;
-        });
+        var extraLatLng = mptbm_osm_extra_marker.getLatLng();
+        urlCoords += ';' + extraLatLng.lng + ',' + extraLatLng.lat;
     }
+
+    multiStopCoords.forEach(function (coord) {
+        urlCoords += ';' + coord.lng + ',' + coord.lat;
+    });
 
     urlCoords += ';' + endLatLng.lng + ',' + endLatLng.lat;
 
@@ -1085,6 +1411,7 @@ function mptbm_calculate_osm_distance() {
 
                 // Show distance/time section
                 jQuery(".mptbm_distance_time").slideDown("fast");
+                mptbm_update_fixed_hours_warning();
 
                 // Draw route on map
                 if (mptbm_osm_route) {
@@ -1144,57 +1471,6 @@ function mptbm_calculate_osm_distance() {
         }).addTo(mptbm_osm_map);
     }
 }
-
-// ---- Multi-stop: add/remove extra-stop rows ----
-jQuery(document).on('click', '.mptbm_add_extra_stop_row', function () {
-    var $wrapper = jQuery(this).closest('.mptbm_extra_stops_wrapper');
-    var $list = $wrapper.find('.mptbm_extra_stops_list');
-    var maxStops = parseInt($wrapper.data('max-stops'), 10) || 3;
-
-    if ($list.children('.mptbm_extra_stop_row').length >= maxStops) {
-        return;
-    }
-
-    var template = document.getElementById('mptbm_extra_stop_row_template');
-    if (!template) return;
-
-    var $row = jQuery(template.content.cloneNode(true));
-    $list.append($row);
-
-    var newInput = $list.find('.mptbm_extra_stop_place_input').last().get(0);
-    if (newInput) {
-        mptbm_init_extra_stop_autocomplete(newInput);
-    }
-
-    if ($list.children('.mptbm_extra_stop_row').length >= maxStops) {
-        jQuery(this).prop('disabled', true).hide();
-    }
-});
-
-jQuery(document).on('click', '.mptbm_remove_extra_stop_row', function () {
-    var $wrapper = jQuery(this).closest('.mptbm_extra_stops_wrapper');
-    var $row = jQuery(this).closest('.mptbm_extra_stop_row');
-    var idx = $row.data('stop-index');
-
-    if (idx !== undefined && idx !== null && mptbm_osm_extra_markers[idx] && mptbm_osm_map) {
-        mptbm_osm_map.removeLayer(mptbm_osm_extra_markers[idx]);
-        mptbm_osm_extra_markers[idx] = null;
-    }
-
-    $row.remove();
-
-    var maxStops = parseInt($wrapper.data('max-stops'), 10) || 3;
-    var $addBtn = $wrapper.find('.mptbm_add_extra_stop_row');
-    if ($wrapper.find('.mptbm_extra_stop_row').length < maxStops) {
-        $addBtn.prop('disabled', false).show();
-    }
-
-    // Refresh the on-page distance/time preview now that a stop is gone - otherwise it
-    // keeps showing the total from before the removal.
-    if (mptbm_osm_start_marker && (mptbm_osm_end_marker || mptbm_osm_extra_markers.some(Boolean))) {
-        mptbm_calculate_osm_distance();
-    }
-});
 
 function mptbm_calculate_google_route_from_markers() {
     if (!mptbm_start_marker || !mptbm_end_marker || !mptbm_map) return;
@@ -1272,6 +1548,7 @@ function mptbm_calculate_google_route_from_markers() {
                 jQuery(".mptbm_total_distance").html(distance_text);
                 jQuery(".mptbm_total_time").html(duration_text);
                 jQuery(".mptbm_distance_time").slideDown("fast");
+                mptbm_update_fixed_hours_warning();
 
                 // Fit map to show the entire route
                 var bounds = new google.maps.LatLngBounds();
@@ -1712,7 +1989,7 @@ function mptbm_init_google_map() {
             .find('[name="mptbm_enable_return_in_different_date"]')
             .val();
 
-        let target = parent.find(".tabsContentNext");
+        let target = parent.find(".mptbm_inline_search_results");
         let target_date = parent.find("#mptbm_map_start_date");
         let return_target_date = parent.find("#mptbm_map_return_date");
         let target_time = parent.find("#mptbm_map_start_time");
@@ -1725,17 +2002,6 @@ function mptbm_init_google_map() {
         let waiting_time = parent.find('[name="mptbm_waiting_time"]').val();
         let fixed_time = parent.find('[name="mptbm_fixed_hours"]').val();
         let mptbm_original_price_base = parent.find('[name="mptbm_original_price_base"]').val();
-
-        // Multi-stop: gather every filled-in extra-stop row, in order, with its captured coordinates.
-        let extra_stop_places = [];
-        let extra_stop_coordinates = [];
-        parent.find('.mptbm_extra_stop_place_input').each(function () {
-            let stopVal = jQuery(this).val();
-            if (stopVal) {
-                extra_stop_places.push(stopVal);
-                extra_stop_coordinates.push(jQuery(this).closest('.mptbm_extra_stop_row').find('.mptbm_extra_stop_coords').val() || '');
-            }
-        });
 
 
         let mptbm_enable_view_search_result_page = parent
@@ -1834,7 +2100,7 @@ function mptbm_init_google_map() {
             // Remove any existing error messages
             removeLocationErrors();
 
-            dLoader(parent.find(".tabsContentNext"));
+            mptbm_search_loading(parent, true);
             mptbm_content_refresh(parent);
             if (price_based !== "manual") {
                 let calc_start = start_place_value;
@@ -1913,6 +2179,23 @@ function mptbm_init_google_map() {
                 });
                 return deferred.promise();
             }
+
+            // In OSM mode, picking a suggestion from the pickup/drop-off
+            // autocomplete already geocoded this exact text once
+            // (mptbm_handle_osm_address_selection stores the result +
+            // the matched text). Re-geocoding the same address again here
+            // was pure waste -- an extra round trip through the slower
+            // server-side lookup, on every single Search click, for
+            // something already known. Reuse it when the field's current
+            // value still matches exactly what was picked; otherwise the
+            // visitor edited the text since then, so fall back to a fresh
+            // lookup rather than trust stale coordinates.
+            function getCachedOrFreshCoordinates(address, cachedCoords, cachedAddress) {
+                if (cachedCoords && cachedAddress === address) {
+                    return $.Deferred().resolve(cachedCoords).promise();
+                }
+                return getCoordinatesAsync(address);
+            }
             if (price_based !== 'manual') {
 
                 // For fixed_zone, pickup is from dropdown (term_XX), so we use pre-stored coords
@@ -1927,9 +2210,9 @@ function mptbm_init_google_map() {
                         dropdownCoords = window.mptbm_fixed_zone_start_coords || null;
 
                         let searchInputValue = getElementValue(searchInput);
-                        getCoordinatesAsync(searchInputValue).done(function (searchCoordinates) {
+                        getCachedOrFreshCoordinates(searchInputValue, window.mptbm_fixed_zone_end_coords, window.mptbm_osm_end_coords_address).done(function (searchCoordinates) {
                             if (!searchCoordinates || searchCoordinates === null) {
-                                dLoaderRemove(parent.find(".tabsContentNext"));
+                                mptbm_search_loading(parent, false);
                                 showLocationError(end_place, 'Invalid dropoff location. Please select a valid address.');
                                 end_place.focus();
                                 return;
@@ -1946,16 +2229,16 @@ function mptbm_init_google_map() {
                         dropdownCoords = window.mptbm_fixed_zone_end_coords || null;
 
                         if (!dropdownCoords) {
-                            dLoaderRemove(parent.find(".tabsContentNext"));
+                            mptbm_search_loading(parent, false);
                             showLocationError(end_place, 'Please select a dropoff location from the dropdown.');
                             parent.find("#mptbm_manual_end_place").focus();
                             return;
                         }
 
                         let searchInputValue = getElementValue(searchInput);
-                        getCoordinatesAsync(searchInputValue).done(function (searchCoordinates) {
+                        getCachedOrFreshCoordinates(searchInputValue, window.mptbm_fixed_zone_start_coords, window.mptbm_osm_start_coords_address).done(function (searchCoordinates) {
                             if (!searchCoordinates || searchCoordinates === null) {
-                                dLoaderRemove(parent.find(".tabsContentNext"));
+                                mptbm_search_loading(parent, false);
                                 showLocationError(start_place, 'Invalid pickup location. Please select a valid address.');
                                 start_place.focus();
                                 return;
@@ -2000,8 +2283,8 @@ function mptbm_init_google_map() {
                                         mptbm_max_passenger: parent.find('#mptbm_max_passenger').val(),
                                         mptbm_max_bag: parent.find('#mptbm_max_bag').val(),
                                         mptbm_max_hand_luggage: parent.find('#mptbm_max_hand_luggage').val(),
-                                        mptbm_extra_stop_place: extra_stop_places,
-                                        mptbm_extra_stop_place_coordinates: extra_stop_coordinates,
+                                        mptbm_extra_stop_place: mptbm_collect_extra_stop_places(parent),
+                                        mptbm_extra_stop_place_coordinates: mptbm_collect_extra_stop_coordinates(parent),
                                         mptbm_original_price_base: mptbm_original_price_base,
                                         mptbm_distance: parent.find('#mptbm_calculated_distance').val() || parent.find('input[name="mptbm_hidden_distance"]').val(),
                                         mptbm_duration: parent.find('#mptbm_calculated_duration').val() || parent.find('input[name="mptbm_hidden_duration"]').val(),
@@ -2009,12 +2292,12 @@ function mptbm_init_google_map() {
                                     success: function (data) {
                                         if (data.success === false) {
                                             alert(data.data.message || 'An error occurred. Please try again.');
-                                            dLoaderRemove(parent.find(".tabsContentNext"));
+                                            mptbm_search_loading(parent, false);
                                             return;
                                         }
                                         target.append(data).promise().done(function () {
-                                            dLoaderRemove(parent.find(".tabsContentNext"));
-                                            parent.find(".nextTab_next").trigger("click");
+                                            mptbm_search_loading(parent, false);
+                                            mptbm_reveal_inline_results(target);
                                             if (mptbm_is_ios()) {
                                                 target[0].style.display = 'none';
                                                 void target[0].offsetHeight;
@@ -2050,8 +2333,8 @@ function mptbm_init_google_map() {
                                         mptbm_max_passenger: parent.find('#mptbm_max_passenger').val(),
                                         mptbm_max_bag: parent.find('#mptbm_max_bag').val(),
                                         mptbm_max_hand_luggage: parent.find('#mptbm_max_hand_luggage').val(),
-                                        mptbm_extra_stop_place: extra_stop_places,
-                                        mptbm_extra_stop_place_coordinates: extra_stop_coordinates,
+                                        mptbm_extra_stop_place: mptbm_collect_extra_stop_places(parent),
+                                        mptbm_extra_stop_place_coordinates: mptbm_collect_extra_stop_coordinates(parent),
                                         mptbm_original_price_base: mptbm_original_price_base,
                                         mptbm_distance: parent.find('#mptbm_calculated_distance').val() || parent.find('input[name="mptbm_hidden_distance"]').val(),
                                         mptbm_duration: parent.find('#mptbm_calculated_duration').val() || parent.find('input[name="mptbm_hidden_duration"]').val(),
@@ -2059,13 +2342,13 @@ function mptbm_init_google_map() {
                                     success: function (data) {
                                         if (data.success === false) {
                                             alert(data.data.message || 'An error occurred. Please try again.');
-                                            dLoaderRemove(parent.find(".tabsContentNext"));
+                                            mptbm_search_loading(parent, false);
                                             return;
                                         }
 
                                         var redirectUrl = mptbm_resolve_redirect_url(data);
                                         if (!redirectUrl) {
-                                            dLoaderRemove(parent.find(".tabsContentNext"));
+                                            mptbm_search_loading(parent, false);
                                             alert('Unable to open the search results page. Please try again.');
                                             return;
                                         }
@@ -2084,19 +2367,19 @@ function mptbm_init_google_map() {
                 }
 
                 $.when(
-                    getCoordinatesAsync(start_place.value),
-                    getCoordinatesAsync(end_place.value)
+                    getCachedOrFreshCoordinates(start_place.value, window.mptbm_fixed_zone_start_coords, window.mptbm_osm_start_coords_address),
+                    getCachedOrFreshCoordinates(end_place.value, window.mptbm_fixed_zone_end_coords, window.mptbm_osm_end_coords_address)
                 ).done(function (startCoordinates, endCoordinates) {
                     // Validate that geocoding was successful
                     if (!startCoordinates || startCoordinates === null) {
-                        dLoaderRemove(parent.find(".tabsContentNext"));
+                        mptbm_search_loading(parent, false);
                         showLocationError(start_place, 'Invalid pickup location. Please select a valid address.');
                         start_place.focus();
                         return;
                     }
 
                     if (!endCoordinates || endCoordinates === null) {
-                        dLoaderRemove(parent.find(".tabsContentNext"));
+                        mptbm_search_loading(parent, false);
                         showLocationError(end_place, 'Invalid dropoff location. Please select a valid address.');
                         end_place.focus();
                         return;
@@ -2131,20 +2414,20 @@ function mptbm_init_google_map() {
                                     mptbm_max_passenger: parent.find('#mptbm_max_passenger').val(),
                                     mptbm_max_bag: parent.find('#mptbm_max_bag').val(),
                                     mptbm_max_hand_luggage: parent.find('#mptbm_max_hand_luggage').val(),
-                                    mptbm_extra_stop_place: extra_stop_places,
-                                        mptbm_extra_stop_place_coordinates: extra_stop_coordinates,
+                                    mptbm_extra_stop_place: mptbm_collect_extra_stop_places(parent),
+                                    mptbm_extra_stop_place_coordinates: mptbm_collect_extra_stop_coordinates(parent),
                                     mptbm_original_price_base: mptbm_original_price_base,
                                     mptbm_distance: parent.find('#mptbm_calculated_distance').val() || parent.find('input[name="mptbm_hidden_distance"]').val(),
                                     mptbm_duration: parent.find('#mptbm_calculated_duration').val() || parent.find('input[name="mptbm_hidden_duration"]').val(),
                                 },
                                 beforeSend: function () {
-                                    //dLoader(target);
+                                    //mptbm_search_loading(parent, true);
                                 },
                                 success: function (data) {
                                     // Check if the response is an error
                                     if (data.success === false) {
                                         alert(data.data.message || 'An error occurred. Please try again.');
-                                        dLoaderRemove(parent.find(".tabsContentNext"));
+                                        mptbm_search_loading(parent, false);
                                         return;
                                     }
 
@@ -2152,8 +2435,8 @@ function mptbm_init_google_map() {
                                         .append(data)
                                         .promise()
                                         .done(function () {
-                                            dLoaderRemove(parent.find(".tabsContentNext"));
-                                            parent.find(".nextTab_next").trigger("click");
+                                            mptbm_search_loading(parent, false);
+                                            mptbm_reveal_inline_results(target);
                                             // iOS DOM reflow workaround
                                             if (mptbm_is_ios()) {
                                                 target[0].style.display = 'none';
@@ -2191,26 +2474,26 @@ function mptbm_init_google_map() {
                                     mptbm_max_passenger: parent.find('#mptbm_max_passenger').val(),
                                     mptbm_max_bag: parent.find('#mptbm_max_bag').val(),
                                     mptbm_max_hand_luggage: parent.find('#mptbm_max_hand_luggage').val(),
-                                    mptbm_extra_stop_place: extra_stop_places,
-                                        mptbm_extra_stop_place_coordinates: extra_stop_coordinates,
+                                    mptbm_extra_stop_place: mptbm_collect_extra_stop_places(parent),
+                                    mptbm_extra_stop_place_coordinates: mptbm_collect_extra_stop_coordinates(parent),
                                     mptbm_original_price_base: mptbm_original_price_base,
                                     mptbm_distance: parent.find('#mptbm_calculated_distance').val() || parent.find('input[name="mptbm_hidden_distance"]').val(),
                                     mptbm_duration: parent.find('#mptbm_calculated_duration').val() || parent.find('input[name="mptbm_hidden_duration"]').val(),
                                 },
                                 beforeSend: function () {
-                                    dLoader(target);
+                                    mptbm_search_loading(parent, true);
                                 },
                                 success: function (data) {
                                     // Check if the response is an error
                                     if (data.success === false) {
                                         alert(data.data.message || 'An error occurred. Please try again.');
-                                        dLoaderRemove(parent.find(".tabsContentNext"));
+                                        mptbm_search_loading(parent, false);
                                         return;
                                     }
 
                                     var redirectUrl = mptbm_resolve_redirect_url(data);
                                     if (!redirectUrl) {
-                                        dLoaderRemove(parent.find(".tabsContentNext"));
+                                        mptbm_search_loading(parent, false);
                                         alert('Unable to open the search results page. Please try again.');
                                         return;
                                     }
@@ -2254,8 +2537,8 @@ function mptbm_init_google_map() {
                                 mptbm_max_passenger: parent.find('#mptbm_max_passenger').val(),
                                 mptbm_max_bag: parent.find('#mptbm_max_bag').val(),
                                 mptbm_max_hand_luggage: parent.find('#mptbm_max_hand_luggage').val(),
-                                mptbm_extra_stop_place: extra_stop_places,
-                                        mptbm_extra_stop_place_coordinates: extra_stop_coordinates,
+                                mptbm_extra_stop_place: mptbm_collect_extra_stop_places(parent),
+                                mptbm_extra_stop_place_coordinates: mptbm_collect_extra_stop_coordinates(parent),
                                 mptbm_original_price_base: mptbm_original_price_base,
                                 mptbm_distance: parent.find('#mptbm_calculated_distance').val() || parent.find('input[name="mptbm_hidden_distance"]').val(),
                                 mptbm_duration: parent.find('#mptbm_calculated_duration').val() || parent.find('input[name="mptbm_hidden_duration"]').val(),
@@ -2263,13 +2546,13 @@ function mptbm_init_google_map() {
                                 mptbm_duration_text: parent.find('input[name="mptbm_hidden_duration_text"]').val(),
                             },
                             beforeSend: function () {
-                                //dLoader(target);
+                                //mptbm_search_loading(parent, true);
                             },
                             success: function (data) {
                                 // Check if the response is an error
                                 if (data.success === false) {
                                     alert(data.data.message || 'An error occurred. Please try again.');
-                                    dLoaderRemove(parent.find(".tabsContentNext"));
+                                    mptbm_search_loading(parent, false);
                                     return;
                                 }
 
@@ -2277,8 +2560,8 @@ function mptbm_init_google_map() {
                                     .append(data)
                                     .promise()
                                     .done(function () {
-                                        dLoaderRemove(parent.find(".tabsContentNext"));
-                                        parent.find(".nextTab_next").trigger("click");
+                                        mptbm_search_loading(parent, false);
+                                        mptbm_reveal_inline_results(target);
                                         // iOS DOM reflow workaround
                                         if (mptbm_is_ios()) {
                                             target[0].style.display = 'none';
@@ -2314,8 +2597,8 @@ function mptbm_init_google_map() {
                                 mptbm_max_passenger: parent.find('#mptbm_max_passenger').val(),
                                 mptbm_max_bag: parent.find('#mptbm_max_bag').val(),
                                 mptbm_max_hand_luggage: parent.find('#mptbm_max_hand_luggage').val(),
-                                mptbm_extra_stop_place: extra_stop_places,
-                                        mptbm_extra_stop_place_coordinates: extra_stop_coordinates,
+                                mptbm_extra_stop_place: mptbm_collect_extra_stop_places(parent),
+                                mptbm_extra_stop_place_coordinates: mptbm_collect_extra_stop_coordinates(parent),
                                 mptbm_original_price_base: mptbm_original_price_base,
                                 mptbm_distance: parent.find('#mptbm_calculated_distance').val() || parent.find('input[name="mptbm_hidden_distance"]').val(),
                                 mptbm_duration: parent.find('#mptbm_calculated_duration').val() || parent.find('input[name="mptbm_hidden_duration"]').val(),
@@ -2323,19 +2606,19 @@ function mptbm_init_google_map() {
                                 mptbm_duration_text: parent.find('input[name="mptbm_hidden_duration_text"]').val(),
                             },
                             beforeSend: function () {
-                                dLoader(target);
+                                mptbm_search_loading(parent, true);
                             },
                             success: function (data) {
                                 // Check if the response is an error
                                 if (data.success === false) {
                                     alert(data.data.message || 'An error occurred. Please try again.');
-                                    dLoaderRemove(parent.find(".tabsContentNext"));
+                                    mptbm_search_loading(parent, false);
                                     return;
                                 }
 
                                 var redirectUrl = mptbm_resolve_redirect_url(data);
                                 if (!redirectUrl) {
-                                    dLoaderRemove(parent.find(".tabsContentNext"));
+                                    mptbm_search_loading(parent, false);
                                     alert('Unable to open the search results page. Please try again.');
                                     return;
                                 }
@@ -2351,7 +2634,7 @@ function mptbm_init_google_map() {
             }
         }
     });
-    $(document).on("change", "#mptbm_map_start_date", function () {
+    $(document).on("change", "#mptbm_map_start_date", function (e, meta) {
         // Clear the time slots list
         $('#mptbm_map_start_time').siblings('.start_time_list').empty();
         $('.start_time_input,#mptbm_map_start_time').val('');
@@ -2360,7 +2643,7 @@ function mptbm_init_google_map() {
         let mptbm_first_calendar_date = $('[name="mptbm_first_calendar_date"]').val();
 
         var selectedDate = $('#mptbm_map_start_date').val();
-        var formattedDate = $.datepicker.parseDate('yy-mm-dd', selectedDate);
+        var formattedDate = flatpickr.parseDate(selectedDate, 'Y-m-d');
 
         // Get today's date in YYYY-MM-DD format
         var today = new Date();
@@ -2426,16 +2709,27 @@ function mptbm_init_google_map() {
 
         // Update the return date picker if needed
         if (mptbm_enable_return_in_different_date == 'yes') {
-            $('#mptbm_return_date').datepicker('option', 'minDate', formattedDate);
+            var fpReturn = $('#mptbm_return_date')[0];
+            if (fpReturn && fpReturn._flatpickr) {
+                fpReturn._flatpickr.set('minDate', formattedDate);
+            }
         }
 
         let parent = $(this).closest(".mptbm_transport_search_area");
         mptbm_content_refresh(parent);
-        parent
-            .find("#mptbm_map_start_time")
-            .closest(".mp_input_select")
-            .find("input.formControl")
-            .trigger("click");
+        // Auto-opening the time dropdown is a "guide the user to the next
+        // field" convenience for when they've just picked a date themselves -
+        // this same "change" event also fires once on every tab load/init
+        // (flatpickr's onReady syncing its defaultDate into this hidden field,
+        // see MP_Global_Function::date_picker_js) with meta.initial set, which
+        // should rebuild the time list above but not pop its dropdown open.
+        if (!(meta && meta.initial)) {
+            parent
+                .find("#mptbm_map_start_time")
+                .closest(".mp_input_select")
+                .find("input.formControl")
+                .trigger("click");
+        }
     });
 
 
@@ -2729,22 +3023,246 @@ function mptbm_init_google_map() {
     );
 })(jQuery);
 
-// Add this test to verify jQuery and event handlers are working
-jQuery(document).ready(function ($) {
-
-    // Test if info buttons exist
-    setTimeout(function () {
-        var infoButtons = $('.mptbm-info-button');
-        if (infoButtons.length > 0) {
-        }
-    }, 1000);
-});
-
 function mptbm_content_refresh(parent) {
     parent.find('[name="mptbm_post_id"]').val("");
     parent.find(".mptbm_map_search_result").remove();
     parent.find(".mptbm_order_summary").remove();
-    parent.find(".get_details_next_link").slideUp("fast");
+}
+// Route planning + map now stay visible while results load inline below the
+// map (instead of switching to a separate step/tab under a full dark
+// overlay) - show a lightweight in-button spinner instead of blurring the
+// whole panel.
+// The AJAX response's outer wrapper carries data-tabs-next="#mptbm_search_result",
+// which the shared tab-pane CSS (.tabsContentNext [data-tabs-next]) hides by
+// default unless it has .active - normally added by switching to that tab.
+// We're no longer switching tabs (results render inline below the map
+// instead), so mark it active and drop the attribute directly.
+// The OSM map keeps whatever zoom/center it had before its container was
+// resized - Leaflet has no way to know the container changed size on its
+// own, so a collapse/expand leaves it showing a cropped fragment of the
+// route rather than re-fitting to it. invalidateSize() tells Leaflet to
+// re-measure its container, then re-fitting to the route's own bounds (or
+// the marker group, before a route line exists) zooms so the whole trip is
+// visible at whatever height the map currently has.
+function mptbm_refit_osm_map() {
+    if (typeof mptbm_osm_map === 'undefined' || !mptbm_osm_map) {
+        return;
+    }
+    setTimeout(function () {
+        mptbm_osm_map.invalidateSize();
+        if (typeof mptbm_osm_route !== 'undefined' && mptbm_osm_route) {
+            mptbm_osm_map.fitBounds(mptbm_osm_route.getBounds().pad(0.1));
+            return;
+        }
+        var markers = [
+            typeof mptbm_osm_start_marker !== 'undefined' ? mptbm_osm_start_marker : null,
+            typeof mptbm_osm_end_marker !== 'undefined' ? mptbm_osm_end_marker : null,
+            typeof mptbm_osm_extra_marker !== 'undefined' ? mptbm_osm_extra_marker : null,
+        ].filter(Boolean);
+        if (markers.length > 0) {
+            var group = new L.featureGroup(markers);
+            mptbm_osm_map.fitBounds(group.getBounds().pad(0.1));
+        }
+    }, 320);
+}
+// Sets the "1 Enter Ride Details / 2 Choose a vehicle / 3 Place Order" step
+// indicator (.tabListsNext, top of the whole booking flow) to reflect
+// targetSelector as the current step - mirrors what mp_script.js's
+// active_next_tab() does to these same classes/icons/text when its
+// nextTab_next/nextTab_prev buttons are clicked, but written as an explicit,
+// idempotent set instead of reusing that function directly: that one also
+// slides .tabsContentNext panels open/closed, adjusts page scroll, and (via
+// mp_all_content_change) unconditionally *toggles* each step's checkmark/
+// class/text - fine for a single click, but calling it every time results
+// load (including repeat searches) would flip the checkmark back and forth
+// instead of staying put once a step is done.
+function mptbm_set_step_active(parent, targetSelector) {
+    var $stepList = parent.find('.tabListsNext').first();
+    if (!$stepList.length) {
+        return;
+    }
+    var $steps = $stepList.children('[data-tabs-target-next]');
+    var targetIndex = $steps.filter('[data-tabs-target-next="' + targetSelector + '"]').index() + 1;
+    if (targetIndex < 1) {
+        return;
+    }
+    $steps.each(function (i) {
+        var stepNum = i + 1;
+        var $step = jQuery(this);
+        $step.toggleClass('active', stepNum <= targetIndex);
+        // Steps strictly before the current one are "done" - swap their
+        // number for a checkmark (data-open-icon/-text vs data-close-icon/
+        // -text, same attributes mp_script.js's content_*_change() read).
+        var isDone = stepNum < targetIndex;
+        var addClass = $step.data('add-class');
+        if (addClass) {
+            var $classTarget = $step.find('[data-class]').length ? $step.find('[data-class]') : $step;
+            $classTarget.toggleClass(addClass, isDone);
+        }
+        var openIcon = $step.data('open-icon');
+        var closeIcon = $step.data('close-icon');
+        if (openIcon || closeIcon) {
+            var $iconTarget = $step.find('[data-icon]');
+            if (isDone) {
+                $iconTarget.removeClass(openIcon).addClass(closeIcon);
+            } else {
+                $iconTarget.removeClass(closeIcon).addClass(openIcon);
+            }
+        }
+        var openText = $step.data('open-text') != null ? $step.data('open-text').toString() : '';
+        var closeText = $step.data('close-text') != null ? $step.data('close-text').toString() : '';
+        if (openText || closeText) {
+            $step.find('[data-text]').html(isDone ? closeText : openText);
+        }
+    });
+}
+function mptbm_reveal_inline_results(target) {
+    target.find('[data-tabs-next]').addClass('active').removeAttr('data-tabs-next');
+    target.addClass('mptbm_inline_results_active');
+    // Results live inside .mptbm_map_area (a sibling of the collapsible map
+    // body), taking over that same column. For "manual" pricing the whole
+    // column starts display:none (no map at all) - force it visible now
+    // that it has results to show. Then auto-collapse just the map body
+    // (still toggleable back open) since results are the priority now.
+    var $mapArea = target.closest('.mptbm_map_area');
+    // Flat-rate/"manual" pricing has no real map at all - no geocoding, just
+    // named location dropdowns. .mptbm_inline_search_results still lives
+    // nested inside .mptbm_map_area though (see below), so that column still
+    // needs to be revealed to show these results - just without any of the
+    // map-specific chrome/collapse/refit logic, which would otherwise force
+    // open a blank gray box sized for a map that was never there.
+    //
+    // Can't tell "no map" apart from "map not initialized yet" just by
+    // checking mptbm_osm_map's truthiness - on the tabs page it's one shared
+    // global var, so a map already initialized for a different tab (e.g. the
+    // default "Hourly" tab on page load) stays truthy even after switching to
+    // Flat Rate. Read this specific tab/form's own price_based value instead
+    // - the same field the PHP template itself keys the map's display on.
+    var $searchAreaRoot = $mapArea.closest('.mptbm_transport_search_area');
+    var priceBased = $searchAreaRoot.find('input[name="mptbm_price_based"]').val();
+    var hasMap = priceBased !== 'manual';
+    // Results now show inline on step 1's own panel instead of switching to a
+    // separate step-2 panel, but the step indicator above it should still
+    // read as "Choose a vehicle" being current now that there's something to
+    // choose from.
+    mptbm_set_step_active($searchAreaRoot, '#mptbm_search_result');
+    if ($mapArea.length) {
+        if (hasMap) {
+            // mptbm_map_collapsed toggles on/off as the user opens/closes the
+            // map peek - mptbm_results_shown never comes back off, marking
+            // "results are now sharing this column with the map" for CSS
+            // that needs to tell that apart from the pre-search state (see
+            // the .fullHeight height override below).
+            $mapArea.css('display', 'flex').addClass('mptbm_map_collapsed mptbm_results_shown');
+            var $toggle = $mapArea.find('.mptbm_map_collapse_toggle');
+            $toggle.attr('aria-expanded', 'false');
+            $toggle.find('[data-label]').text($toggle.data('expand-text'));
+            mptbm_refit_osm_map();
+        } else {
+            $mapArea.css('display', 'flex').addClass('mptbm_map_area_no_map');
+        }
+        // Fold Total Distance/Total Time into the trip-summary card's own
+        // meta row too, alongside Duration/Pickup Date/Pickup Time - reading
+        // the current text rather than moving the live .mptbm_total_distance/
+        // .mptbm_total_time nodes themselves, since those keep getting
+        // updated in place as the user adjusts locations for their *next*
+        // search and need to still exist for that. Hiding (not removing)
+        // the original bar keeps that live-update wiring intact underneath.
+        // There can be several .mptbm_summary_top_row elements at once - one
+        // per hidden .leftSidebar (summary.php renders one per pricing tab)
+        // plus the one actually inside the visible .mptbm_results_toolbar -
+        // .first() alone would silently grab a hidden one, so scope to the
+        // toolbar's own row specifically.
+        var $summaryRow = target.find('.mptbm_results_toolbar .mptbm_summary_top_row').first();
+        if ($summaryRow.length) {
+            // Transfer Type and Extra Waiting Hours are their own custom
+            // dropdown widgets (a readonly text input showing the chosen
+            // option's label, proxying a real <select>) living in Route
+            // Planning itself (a sibling of .mptbm_map_area, both under the
+            // same .mptbm_transport_search_area root) - only rendered at all
+            // when their respective settings are enabled, so each is read
+            // only if actually present.
+            var $transferType = $searchAreaRoot.find('[data-proxy-for="mptbm_taxi_return"]');
+            var $waitingHours = $searchAreaRoot.find('[data-proxy-for="mptbm_waiting_time"]');
+            if ($transferType.length) {
+                var transferLabel = $transferType.find('span').first().text().trim();
+                var transferValue = $transferType.find('input.formControl').first().val();
+                if (transferValue) {
+                    $summaryRow.append(
+                        jQuery('<div class="mptbm_summary_top_col mptbm_summary_col_transfer_type"></div>')
+                            .append(jQuery('<h6/>').text(transferLabel))
+                            .append(jQuery('<p class="_textLight_1"/>').text(transferValue))
+                    );
+                }
+            }
+            if ($waitingHours.length) {
+                var waitingLabel = $waitingHours.find('span').first().text().trim();
+                var waitingValue = $waitingHours.find('input.formControl').first().val();
+                if (waitingValue) {
+                    $summaryRow.append(
+                        jQuery('<div class="mptbm_summary_top_col mptbm_summary_col_waiting_hours"></div>')
+                            .append(jQuery('<h6/>').text(waitingLabel))
+                            .append(jQuery('<p class="_textLight_1"/>').text(waitingValue))
+                    );
+                }
+            }
+        }
+        // Flat-rate/"manual" pricing never computes a real distance/time (no
+        // geocoding at all) - the bar always just shows its placeholder
+        // "0 KM"/"0 Hour" text, so skip merging it in for that mode instead
+        // of surfacing those meaningless zero values in the summary.
+        var $distanceTime = hasMap ? $mapArea.find('.mptbm_distance_time') : jQuery();
+        if ($summaryRow.length && $distanceTime.length) {
+            var $distanceVal = $distanceTime.find('.mptbm_total_distance').first();
+            var $timeVal = $distanceTime.find('.mptbm_total_time').first();
+            var distanceText = $distanceVal.text().trim();
+            var timeText = $timeVal.text().trim();
+            // The original bar's labels are written in ALL CAPS in the source
+            // string itself (translated, so not just a CSS transform) - title-
+            // casing here (rather than a CSS transform, which can't lowercase
+            // characters that are already uppercase) matches the normal-case
+            // style of Duration/Pickup Date/Pickup Time next to them.
+            function mptbm_title_case(str) {
+                return str.toLowerCase().replace(/\b\w/g, function (c) { return c.toUpperCase(); });
+            }
+            var distanceLabel = mptbm_title_case($distanceVal.closest('.fdColumn').find('h6').first().text().trim());
+            var timeLabel = mptbm_title_case($timeVal.closest('.fdColumn').find('h6').first().text().trim());
+            if (distanceText) {
+                $summaryRow.append(
+                    jQuery('<div class="mptbm_summary_top_col mptbm_summary_col_distance"></div>')
+                        .append(jQuery('<h6/>').text(distanceLabel))
+                        .append(jQuery('<p class="_textLight_1"/>').text(distanceText))
+                );
+            }
+            if (timeText) {
+                $summaryRow.append(
+                    jQuery('<div class="mptbm_summary_top_col mptbm_summary_col_time_total"></div>')
+                        .append(jQuery('<h6/>').text(timeLabel))
+                        .append(jQuery('<p class="_textLight_1"/>').text(timeText))
+                );
+            }
+            $distanceTime.addClass('mptbm_distance_time_merged');
+        }
+    }
+    // mp_script.js's lazy-load only scans [data-bg-image] on initial page
+    // load/scroll (loadBgImage(), guarded so it only ever runs once) - vehicle
+    // photos appended here afterwards never get picked up otherwise, showing
+    // as the empty gray placeholder. loadBgImage() itself has no such guard,
+    // so calling it directly force-scans the newly appended cards' images.
+    if (typeof loadBgImage === 'function') {
+        loadBgImage();
+    }
+}
+function mptbm_search_loading(parent, isLoading) {
+    var btn = parent.find('#mptbm_get_vehicle');
+    var icon = btn.find('.fa-search-location, .fa-spinner').first();
+    if (isLoading) {
+        btn.prop('disabled', true).addClass('mptbm-searching');
+        icon.removeClass('fa-search-location').addClass('fa-spinner fa-spin');
+    } else {
+        btn.prop('disabled', false).removeClass('mptbm-searching');
+        icon.removeClass('fa-spinner fa-spin').addClass('fa-search-location');
+    }
 }
 //=======================//
 function mptbm_price_calculation(parent) {
@@ -2765,26 +3283,7 @@ function mptbm_price_calculation(parent) {
 
         let base_price_extra = unit_base_price_extra * quantityVal * tax_multiplier_val;
 
-        // Flat charge per extra stop the customer added between pickup and drop-off,
-        // scaled by quantity like the base transport price (each vehicle makes the same stops).
-        let stop_price_per_unit = parseFloat(parent.find('[name="mptbm_post_id"]').attr("data-stop-price") || 0);
-        let stop_count = parent.find('.mptbm_extra_stop_place_input').filter(function () {
-            return jQuery(this).val() && jQuery(this).val().trim() !== '';
-        }).length;
-        let stop_total_price = stop_price_per_unit * stop_count * quantityVal;
-
-        let stop_detail_container = parent.find(".mptbm_stop_price_detail");
-        if (stop_price_per_unit > 0 && stop_count > 0) {
-            let stop_html = '<div class="_textTheme" style="font-size: 13px; margin-top: 5px; padding-left: 25px;">' +
-                'Stopage Fare: ' + stop_count + ' x ' + mp_price_format(stop_price_per_unit) +
-                (quantityVal > 1 ? ' x ' + quantityVal : '') +
-                ' = ' + mp_price_format(stop_total_price) + '</div>';
-            stop_detail_container.html(stop_html).show();
-        } else {
-            stop_detail_container.html('').hide();
-        }
-
-        total = total + base_transport_price + base_price_extra + stop_total_price;
+        total = total + base_transport_price + base_price_extra;
 
 
         parent.find(".mptbm_extra_service_item").each(function () {
@@ -2936,6 +3435,11 @@ function mptbm_calculate_base_distances(settings, pickup, dropoff, callback) {
             $this.removeClass('active_select');
             mp_all_content_change($this);
             target_summary.slideUp(400);
+            // No vehicle selected anymore -- step 3 is no longer a preview.
+            // Matched by data-tabs-target-next rather than .step-place-order:
+            // that class only exists in transport_result.php's copy of this
+            // stepper, not the one registration_layout.php renders.
+            parent.find('[data-tabs-target-next="#mptbm_order_summary"]').removeClass('active');
         } else {
             parent.find('.mptbm_transport_select.active_select').each(function () {
                 $(this).removeClass('active_select');
@@ -2965,6 +3469,10 @@ function mptbm_calculate_base_distances(settings, pickup, dropoff, callback) {
                 $('.mptbm_booking_item').removeClass('selected');
                 $this.closest('.mptbm_booking_item').addClass('selected');
 
+                // Preview step 3 ("Place Order") as active as soon as a vehicle is
+                // picked, ahead of the checkout content actually loading.
+                parent.find('[data-tabs-target-next="#mptbm_order_summary"]').addClass('active');
+
                 mp_all_content_change($this);
 
                 parent.find('[name="mptbm_post_id"]').val(post_id);
@@ -2972,7 +3480,6 @@ function mptbm_calculate_base_distances(settings, pickup, dropoff, callback) {
                 parent.find('[name="mptbm_post_id"]').attr('data-unit-transport-price', transport_price);
                 parent.find('[name="mptbm_post_id"]').attr('data-base-price-calculated', 0);
                 parent.find('[name="mptbm_post_id"]').attr('data-unit-base-price', 0);
-                parent.find('[name="mptbm_post_id"]').attr('data-stop-price', $this.attr('data-stop-price') || 0);
 
                 // --- BASE PRICE CALCULATION ---
                 // FIX: Use the server-calculated base price directly to avoid discrepancies (1.30 difference)
@@ -3002,48 +3509,68 @@ function mptbm_calculate_base_distances(settings, pickup, dropoff, callback) {
                     mptbm_price_calculation(parent);
                 });
 
-                // Fetch extra services
-                $.ajax({
+                // Fetch extra services + their summary in parallel instead of
+                // one after another - each request only needs post_id and
+                // renders its own independent template server-side (see
+                // get_mptbm_extra_service/_summary in MPTBM_Transport_Search.php),
+                // so chaining them was just doubling the wait for no reason.
+                dLoader(parent.find('.tabsContentNext'));
+                var extraServiceReq = $.ajax({
                     type: 'POST',
                     url: mp_ajax_url,
-                    data: { "action": "get_mptbm_extra_service", "nonce": mptbm_ajax.search_nonce, "post_id": post_id },
-                    beforeSend: function () { dLoader(parent.find('.tabsContentNext')); },
-                    success: function (data) {
-                        target_extra_service.html(data);
-                        checkAndToggleBookNowButton(parent);
-                        if (mptbm_is_ios()) {
-                            target_extra_service[0].style.display = 'none';
-                            void target_extra_service[0].offsetHeight;
-                            target_extra_service[0].style.display = '';
-                        }
+                    data: { "action": "get_mptbm_extra_service", "nonce": mptbm_ajax.search_nonce, "post_id": post_id }
+                });
+                var extraServiceSummaryReq = $.ajax({
+                    type: 'POST',
+                    url: mp_ajax_url,
+                    data: { "action": "get_mptbm_extra_service_summary", "nonce": mptbm_ajax.search_nonce, "post_id": post_id }
+                });
+                $.when(extraServiceReq, extraServiceSummaryReq).done(function (serviceResp, summaryResp) {
+                    target_extra_service.html(serviceResp[0]);
+                    // The footer copy of .mptbm_transport_summary just arrived with
+                    // this markup - CSS hides every .mptbm_transport_summary by
+                    // default (shown only via the sidebar's own slideDown, which
+                    // already ran before this element existed), so reveal this one
+                    // explicitly rather than waiting on the next price recalculation.
+                    target_extra_service.find('.mptbm_transport_summary').show();
+                    // Fill in its price/total immediately - otherwise it stays blank
+                    // until the customer's first extra-service click, since the vehicle
+                    // price line and base price calculation both already ran before
+                    // this copy existed. Copy the sidebar's already-computed price line
+                    // rather than re-deriving it (quantity/tax/custom-message logic
+                    // lives in the click handler above, not worth duplicating here).
+                    target_extra_service.find('.mptbm_product_price').html(
+                        target_summary.find('.mptbm_product_price').first().html()
+                    );
+                    mptbm_price_calculation(parent);
+                    checkAndToggleBookNowButton(parent);
+                    if (mptbm_is_ios()) {
+                        target_extra_service[0].style.display = 'none';
+                        void target_extra_service[0].offsetHeight;
+                        target_extra_service[0].style.display = '';
                     }
-                }).promise().done(function () {
-                    $.ajax({
-                        type: 'POST',
-                        url: mp_ajax_url,
-                        data: { "action": "get_mptbm_extra_service_summary", "nonce": mptbm_ajax.search_nonce, "post_id": post_id },
-                        success: function (data) {
-                            if (!data || data.length < 100) {
-                            }
-                            target_extra_service_summary.html(data).promise().done(function () {
-                                if (target_extra_service.find('[name="mptbm_extra_service[]"]').length > 0) {
-                                    target_summary.slideDown(400);
-                                    target_extra_service.slideDown(400);
-                                    target_extra_service_summary.slideDown(400);
-                                    pageScrollTo(target_extra_service);
-                                }
-                                dLoaderRemove(parent.find('.tabsContentNext'));
-                                if (!target_extra_service.find('[name="mptbm_extra_service[]"]').length) {
-                                    parent.find('.mptbm_book_now[type="button"]').trigger('click');
-                                } else {
-                                    checkAndToggleBookNowButton(parent);
-                                }
-                                if (mptbm_is_ios()) {
-                                    target_extra_service_summary[0].style.display = 'none';
-                                    void target_extra_service_summary[0].offsetHeight;
-                                    target_extra_service_summary[0].style.display = '';
-                                }
-                            });
+
+                    // Re-query instead of using target_extra_service_summary as
+                    // captured before this vehicle's markup existed: that snapshot
+                    // only ever matched the sidebar copy, so the footer copy
+                    // (revealed just above) would never receive the itemized
+                    // breakdown otherwise.
+                    let all_extra_service_summary = parent.find('.mptbm_extra_service_summary');
+                    all_extra_service_summary.html(summaryResp[0]).promise().done(function () {
+                        if (target_extra_service.find('[name="mptbm_extra_service[]"]').length > 0) {
+                            target_summary.slideDown(400);
+                            target_extra_service.slideDown(400);
+                            all_extra_service_summary.slideDown(400);
+                            pageScrollTo(target_extra_service);
+                        }
+                        dLoaderRemove(parent.find('.tabsContentNext'));
+                        if (!target_extra_service.find('[name="mptbm_extra_service[]"]').length) {
+                            parent.find('.mptbm_book_now[type="button"]').trigger('click');
+                        } else {
+                            checkAndToggleBookNowButton(parent);
+                        }
+                        if (mptbm_is_ios()) {
+                            all_extra_service_summary.hide().show(0);
                         }
                     });
                 });
@@ -3086,6 +3613,21 @@ function mptbm_calculate_base_distances(settings, pickup, dropoff, callback) {
     }
 
 
+
+    //===========================//
+    $(document).on('click', '.mptbm_map_collapse_toggle', function () {
+        var $btn = $(this);
+        var $mapArea = $btn.closest('.mptbm_map_area');
+        var collapsed = $mapArea.toggleClass('mptbm_map_collapsed').hasClass('mptbm_map_collapsed');
+        $btn.attr('aria-expanded', collapsed ? 'false' : 'true');
+        $btn.find('[data-label]').text(collapsed ? $btn.data('expand-text') : $btn.data('collapse-text'));
+        mptbm_refit_osm_map();
+    });
+
+    //===========================//
+    $(document).on('click', '.mptbm_inline_results_reset', function () {
+        window.location.reload();
+    });
 
     //===========================//
     $(document).on('click', '.mptbm_transport_search_area .mptbm_get_vehicle_prev', function () {
@@ -3239,7 +3781,7 @@ function mptbm_calculate_base_distances(settings, pickup, dropoff, callback) {
                     mptbm_max_passenger: parent.find('#mptbm_max_passenger').val(),
                     mptbm_max_bag: parent.find('#mptbm_max_bag').val(),
                     mptbm_max_hand_luggage: parent.find('#mptbm_max_hand_luggage').val(),
-                    mptbm_extra_stop_place: parent.find('.mptbm_hidden_extra_stop_place').map(function () { return jQuery(this).val(); }).get(),
+                    mptbm_extra_stop_place: parent.find('input[name="mptbm_extra_stop_place"]').val(),
                     mptbm_original_price_base: mptbm_original_price_base,
                     mptbm_distance: parent.find('input[name="mptbm_hidden_distance"]').val(),
                     mptbm_duration: parent.find('input[name="mptbm_hidden_duration"]').val(),
@@ -3339,152 +3881,122 @@ function mptbm_calculate_base_distances(settings, pickup, dropoff, callback) {
             var tab_id = $(this).attr('mptbm-data-tab');
             var form_style = $(this).attr('mptbm-data-form-style');
             var map = $(this).attr('mptbm-data-map');
+            var $tabContentWrap = $(this).closest('.mptb-tab-container').find('.mptb-tabs-content-wrap');
+
+            // Ignore re-clicks on the active tab or while a switch is already loading
+            if ($(this).hasClass('current') || $tabContentWrap.hasClass('mptbm-tab-loading')) {
+                return;
+            }
 
             // Clean up existing map instance before switching tabs
             mptbm_cleanup_map();
 
-            // Check if the target tab already has content
-            var targetTabContainer = $("#" + tab_id);
-            var hasExistingContent = targetTabContainer.length > 0 && targetTabContainer.html().trim() !== '';
-
-            // Only show loading overlay if the tab doesn't have content or needs to be refreshed
-            if (!hasExistingContent) {
-                // Remove any existing loading overlay
-                $('.mptbm-loading-overlay').remove();
-
-                // Create a new loading overlay with CSS spinner animation
-                var loadingOverlay = $('<div class="mptbm-loading-overlay" style="position: fixed !important; top: 50% !important; left: 50% !important; transform: translate(-50%, -50%) !important; z-index: 9999 !important; padding: 30px !important; text-align: center !important;"><div class="mptbm-spinner"></div></div>');
-
-                // Append to body to ensure it's visible
-                $('body').append(loadingOverlay);
+            // Freeze height so the wrap does not collapse while content stays
+            // visible (faded) under the spinner. After load, settleHeight()
+            // eases to the new content size, then clears the lock (height: auto).
+            var lockedHeight = $tabContentWrap.outerHeight() || 0;
+            if (lockedHeight > 0) {
+                $tabContentWrap.css('min-height', lockedHeight + 'px');
             }
 
-            // Mark the clicked tab as active
+            function settleHeight() {
+                if (!$tabContentWrap.length) {
+                    return;
+                }
+                var $currentTab = $tabContentWrap.find('.mptb-tab-content.current');
+                var contentHeight = $currentTab.length ? $currentTab.outerHeight(true) : 0;
+                if (contentHeight > 0) {
+                    $tabContentWrap.css('min-height', contentHeight + 'px');
+                }
+                setTimeout(function () {
+                    $tabContentWrap.css('min-height', '');
+                }, 260);
+            }
+
+            function clearTabLoader() {
+                $tabContentWrap.removeClass('mptbm-tab-loading');
+                $tabContentWrap.find('.mptbm-tab-loader, .mptbm-loading-overlay').remove();
+            }
+
+            // Keep the active tab content on screen (opacity via CSS) and show
+            // a spinner with no overlay background while the next tab loads.
+            clearTabLoader();
+            $tabContentWrap.addClass('mptbm-tab-loading');
+            $tabContentWrap.append('<div class="mptbm-tab-loader"><div class="mptbm-spinner"></div></div>');
+
+            // Mark the clicked tab pill as active
             $('.mptb-tabs li').removeClass('current');
             $(this).addClass('current');
 
-            // Handle content loading based on whether tab already has content
-            if (hasExistingContent) {
-                // Tab already has content, just show it without AJAX call
-                $('.mptb-tab-content').removeClass('current');
-                targetTabContainer.addClass('current');
+            $.ajax({
+                type: "POST",
+                url: mp_ajax_url,
+                data: {
+                    action: "load_get_details_page",
+                    nonce: mptbm_ajax.search_nonce,
+                    tab_id: tab_id,
+                    form_style: form_style,
+                    map: map
+                },
+                success: function (data) {
+                    var tabContainer = $("#" + tab_id);
+                    if (tabContainer.length === 0) {
+                        var tabContainerParent = $tabContentWrap.length ? $tabContentWrap : $('.mptb-tab-container');
+                        if (tabContainerParent.length > 0) {
+                            var newTabContainer = $('<div id="' + tab_id + '" class="mptb-tab-content"></div>');
+                            tabContainerParent.append(newTabContainer);
+                            tabContainer = newTabContainer;
+                        } else {
+                            console.error('Tab container parent not found');
+                            clearTabLoader();
+                            return;
+                        }
+                    }
 
-                // Force display block if CSS class doesn't work
-                if (!targetTabContainer.is(':visible')) {
-                    targetTabContainer.css('display', 'block');
-                }
+                    // Empty other tabs only now — keeps previous content visible
+                    // under the faded loader until replacement is ready, and
+                    // avoids duplicate field IDs once the new markup is inserted.
+                    $('.mptb-tab-content').not(tabContainer).empty();
+                    tabContainer.html(data);
 
-                return; // Exit the click handler early
-            }
+                    $('.mptb-tab-content').removeClass('current');
+                    tabContainer.addClass('current');
 
-            // Remove existing template before inserting the new one
-            $('.mptb-tab-content').empty().removeClass('current');
+                    if (!tabContainer.is(':visible')) {
+                        tabContainer.css('display', 'block');
+                    }
 
-            // Small delay to ensure loading GIF is rendered before AJAX starts (only when loading new content)
-            setTimeout(function () {
-                // AJAX call to load the template
-                $.ajax({
-                    type: "POST",
-                    url: mp_ajax_url, // WordPress AJAX URL
-                    data: {
-                        action: "load_get_details_page",
-                        nonce: mptbm_ajax.search_nonce,
-                        tab_id: tab_id,
-                        form_style: form_style,
-                        map: map
-                    },
-                    beforeSend: function () {
-                        // Check if the tab container exists before trying to insert loading message
-                        var tabContainer = $("#" + tab_id);
-                        if (tabContainer.length === 0) {
-                            // Create the container if it doesn't exist
-                            var tabContainerParent = $('.mptb-tab-container');
-                            if (tabContainerParent.length > 0) {
-                                var newTabContainer = $('<div id="' + tab_id + '" class="mptb-tab-content"></div>');
-                                tabContainerParent.append(newTabContainer);
-                                tabContainer = newTabContainer;
-                            }
+                    clearTabLoader();
+                    settleHeight();
+
+                    setTimeout(function () {
+                        var currentTab = $('.mptb-tabs li.current').attr('mptbm-data-tab');
+                        var mapEnabled = $('.mptb-tabs li.current').attr('mptbm-data-map');
+
+                        if (currentTab !== 'flat-rate' && mapEnabled === 'yes') {
+                            mptbm_map_area_init();
                         }
 
-                        if (tabContainer.length > 0) {
-                            tabContainer.html('<div style="text-align: center; padding: 20px;"><p>Loading...</p><div style="margin-top: 10px;">Please wait while we load the booking form...</div></div>');
-                        }
-                    },
-                    success: function (data) {
-
-
-                        // Check if the tab container exists
-                        var tabContainer = $("#" + tab_id);
-                        if (tabContainer.length === 0) {
-
-                            // Try to create the tab container if it doesn't exist
-                            var tabContainerParent = $('.mptb-tab-container');
-                            if (tabContainerParent.length > 0) {
-                                var newTabContainer = $('<div id="' + tab_id + '" class="mptb-tab-content"></div>');
-                                tabContainerParent.append(newTabContainer);
-                                tabContainer = newTabContainer;
-                            } else {
-                                console.error('Tab container parent not found');
-                                return;
-                            }
+                        var mapType = document.getElementById('mptbm_map_type');
+                        if (!(mapType && mapType.value === 'openstreetmap')) {
+                            initializeGooglePlacesAutocomplete();
                         }
 
-                        // Insert the content into the correct tab container
-                        tabContainer.html(data);
-
-                        // Ensure the tab content is visible using CSS classes
+                        settleHeight();
+                    }, 100);
+                },
+                error: function () {
+                    clearTabLoader();
+                    var tabContainer = $("#" + tab_id);
+                    if (tabContainer.length > 0) {
+                        $('.mptb-tab-content').not(tabContainer).empty();
+                        tabContainer.html('<div style="text-align: center; padding: 20px; color: red;"><p>Error loading content. Please try again.</p></div>');
                         $('.mptb-tab-content').removeClass('current');
                         tabContainer.addClass('current');
-
-                        // Force display block if CSS class doesn't work
-                        if (!tabContainer.is(':visible')) {
-                            tabContainer.css('display', 'block');
-                        }
-
-                        // Hide loading GIF after content is loaded with a minimum display time
-
-                        // Add a minimum display time of 1000ms to ensure the loading GIF is visible
-                        // This gives more time for the user to see the loading state
-                        setTimeout(function () {
-                            // Remove the loading overlay
-                            $('.mptbm-loading-overlay').remove();
-                        }, 1000);
-
-                        // Add a small delay to ensure DOM is fully updated before initializing map
-                        setTimeout(function () {
-                            // Only initialize map if the current tab should have a map
-                            var currentTab = $('.mptb-tabs li.current').attr('mptbm-data-tab');
-                            var mapEnabled = $('.mptb-tabs li.current').attr('mptbm-data-map');
-
-                            // Don't initialize map for manual/flat-rate tab or if map is disabled
-                            if (currentTab !== 'flat-rate' && mapEnabled === 'yes') {
-                                // **Reinitialize the map-related elements after template loads**
-                                mptbm_map_area_init();
-                            }
-
-                            // Reinitialize autocomplete based on map type
-                            var mapType = document.getElementById('mptbm_map_type');
-
-                            if (mapType && mapType.value === 'openstreetmap') {
-                            } else {
-                                initializeGooglePlacesAutocomplete();
-                            }
-                        }, 100);
-                    },
-                    error: function (response) {
-                        // Hide loading GIF on error with minimum display time
-                        setTimeout(function () {
-                            // Remove the loading overlay
-                            $('.mptbm-loading-overlay').remove();
-                        }, 1000);
-                        // Show error message
-                        var tabContainer = $("#" + tab_id);
-                        if (tabContainer.length > 0) {
-                            tabContainer.html('<div style="text-align: center; padding: 20px; color: red;"><p>Error loading content. Please try again.</p></div>');
-                        }
-                    },
-                });
-            }, 100); // Close the setTimeout for AJAX delay
+                    }
+                    settleHeight();
+                },
+            });
         });
     });
 
@@ -3515,13 +4027,14 @@ function mptbm_calculate_base_distances(settings, pickup, dropoff, callback) {
         // $select.hide(); // REMOVED - keep select visible
 
         // Create custom select wrapper with dynamic positioning
-        var $customWrapper = $('<div class="mptbm-custom-select-wrapper" style="position: fixed !important; z-index: 9999 !important; background: white !important; border: 1px solid #ddd !important; border-radius: 4px !important; box-shadow: 0 2px 8px rgba(0,0,0,0.1) !important;"></div>');
+        // (cosmetic styling lives in mptbm_registration.css; only positioning is set inline)
+        var $customWrapper = $('<div class="mptbm-custom-select-wrapper"></div>');
 
         // Create search input
-        var $searchInput = $('<input type="text" class="mptbm-custom-search-input" placeholder="Search locations..." style="width: 100% !important; padding: 8px !important; border: none !important; border-bottom: 1px solid #eee !important; border-radius: 4px 4px 0 0 !important; font-size: 14px !important; box-sizing: border-box !important; background: #F5F6F8 !important; color: #222222 !important; font-weight: 400 !important; outline: none !important;" />');
+        var $searchInput = $('<input type="text" class="mptbm-custom-search-input" placeholder="Search locations..." />');
 
         // Create options container
-        var $optionsContainer = $('<div class="mptbm-custom-options" style="max-height: 200px !important; overflow-y: auto !important; background: white !important;"></div>');
+        var $optionsContainer = $('<div class="mptbm-custom-options"></div>');
 
         // Function to update dropdown position
         function updateDropdownPosition() {
@@ -3570,7 +4083,7 @@ function mptbm_calculate_base_distances(settings, pickup, dropoff, callback) {
             var isSelected = $(this).is(':selected');
 
             var selectedClass = isSelected ? 'mptbm-option-selected' : '';
-            optionsHtml += '<div class="mptbm-custom-option ' + selectedClass + '" data-value="' + optionValue + '" style="padding: 8px !important; cursor: pointer !important; border-bottom: 1px solid #f5f5f5 !important; font-size: 14px !important; color: #222222 !important;">' + optionText + '</div>';
+            optionsHtml += '<div class="mptbm-custom-option ' + selectedClass + '" data-value="' + optionValue + '">' + optionText + '</div>';
         });
 
         $optionsContainer.html(optionsHtml);
@@ -3688,43 +4201,27 @@ function mptbm_calculate_base_distances(settings, pickup, dropoff, callback) {
         }
     });
 
-    // Handle extra info toggle functionality
-    $(document).on('click', '.mptbm-info-button', function (e) {
+    // "View Details" toggle - expands the real specs/reviews panel rendered
+    // server-side in vehicle_item.php (only present when there is genuinely
+    // more content than the visible feature chips).
+    $(document).on('click', '.mptbm_view_details_toggle', function (e) {
         e.preventDefault();
         e.stopPropagation();
 
         var $button = $(this);
         var postId = $button.data('post-id');
-        var $vehicleWrapper = $button.closest('.mptbm-vehicle-wrapper');
-        var $content = $vehicleWrapper.find('.mptbm-extra-info-content[data-post-id="' + postId + '"]');
-        var $icon = $button.find('i');
-
-
-        // Close other open info panels
-        $('.mptbm-extra-info-content').not($content).slideUp(200);
-        $('.mptbm-info-button').not($button).css('background', 'var(--color_theme)').find('i').removeClass('fa-times').addClass('fa-info');
-
-        if ($content.length > 0) {
-            $content.slideToggle(300, function () {
-                if ($content.is(':visible')) {
-                    $button.css('background', '#dc3545'); // Red when open
-                    $icon.removeClass('fa-info').addClass('fa-times');
-                } else {
-                    $button.css('background', 'var(--color_theme)');
-                    $icon.removeClass('fa-times').addClass('fa-info');
-                }
-            });
-        } else {
-            console.log('No content found for post ID:', postId); // Debug log
+        var $wrapper = $button.closest('.mptbm-vehicle-wrapper');
+        var $panel = $wrapper.find('.mptbm_vehicle_details_panel[data-post-id="' + postId + '"]');
+        if (!$panel.length) {
+            return;
         }
-    });
 
-    // Close info panels when clicking outside
-    $(document).on('click', function (e) {
-        if (!$(e.target).closest('.mptbm-button-container, .mptbm-extra-info-content').length) {
-            $('.mptbm-extra-info-content').slideUp(200);
-            $('.mptbm-info-button').css('background', 'var(--color_theme)').find('i').removeClass('fa-times').addClass('fa-info');
-        }
+        $panel.slideToggle(250, function () {
+            var isOpen = $panel.is(':visible');
+            $button.attr('aria-expanded', isOpen ? 'true' : 'false');
+            $button.toggleClass('is-open', isOpen);
+            $button.find('[data-label]').text(isOpen ? $button.data('hide-text') : $button.data('view-text'));
+        });
     });
 
 }(jQuery));
@@ -3810,3 +4307,364 @@ function mptbm_fallback_distance_calculation(start_place, end_place) {
         });
     }
 }
+
+// "Best Price" badge on the search-results vehicle cards: computed from the
+// actual prices rendered for the current search (not a fabricated claim).
+// The vehicle list loads in over AJAX after a search, and .mainSection
+// itself doesn't exist until then, so this watches the whole document for
+// it to appear/change rather than trying to bind to a specific element.
+(function ($) {
+    "use strict";
+
+    function highlightBestPrice() {
+        $('.mainSection').each(function () {
+            var mainSection = $(this);
+            var cheapestBtn = null;
+            var cheapestPrice = Infinity;
+
+            mainSection.find('.mptbm_transport_select[data-transport-price]').each(function () {
+                var price = parseFloat($(this).attr('data-transport-price'));
+                var item = $(this).closest('.mptbm_booking_item');
+                if (!price || price <= 0 || item.hasClass('mptbm_booking_item_hidden')) {
+                    return;
+                }
+                if (price < cheapestPrice) {
+                    cheapestPrice = price;
+                    cheapestBtn = $(this);
+                }
+            });
+
+            mainSection.find('.mptbm_best_price_badge').remove();
+
+            if (cheapestBtn) {
+                var image = cheapestBtn.closest('.mptbm_booking_item').find('.mptbm_vehicle_image').first();
+                image.append('<span class="mptbm_best_price_badge">Best Price</span>');
+            }
+        });
+    }
+
+    // Results toolbar: live count of vehicles actually visible after geo-fence /
+    // availability filtering (real data — same "hidden" class the rest of the
+    // page already relies on), not the raw server-side query count.
+    function updateResultsCount() {
+        $('.mainSection').each(function () {
+            var mainSection = $(this);
+            var visible = mainSection.find('.mptbm_booking_item').not('.mptbm_booking_item_hidden').length;
+            mainSection.find('.mptbm_results_count_number').text(visible);
+        });
+    }
+
+    var debounceTimer = null;
+    function scheduleHighlight() {
+        clearTimeout(debounceTimer);
+        debounceTimer = setTimeout(function () {
+            highlightBestPrice();
+            updateResultsCount();
+        }, 150);
+    }
+
+    // Sort vehicle cards by their real rendered price. "Recommended" restores
+    // the original server-rendered order (first time we see a given results
+    // list, its current DOM order is cached as that baseline).
+    function sortVehicles(mainSection, mode) {
+        var area = mainSection.find('.mp_sticky_depend_area').first();
+        var wrappers = area.children('.mptbm-vehicle-wrapper').toArray();
+        if (!wrappers.length) {
+            return;
+        }
+        if (!area.data('mptbmOriginalOrder')) {
+            area.data('mptbmOriginalOrder', wrappers.slice());
+        }
+
+        var ordered;
+        if (mode === 'price_low' || mode === 'price_high') {
+            ordered = wrappers.slice().sort(function (a, b) {
+                var priceA = parseFloat($(a).find('[data-transport-price]').first().attr('data-transport-price')) || 0;
+                var priceB = parseFloat($(b).find('[data-transport-price]').first().attr('data-transport-price')) || 0;
+                return mode === 'price_high' ? priceB - priceA : priceA - priceB;
+            });
+        } else if (mode === 'rating') {
+            ordered = wrappers.slice().sort(function (a, b) {
+                var ratingA = parseFloat($(a).find('[data-transport-rating]').first().attr('data-transport-rating')) || 0;
+                var ratingB = parseFloat($(b).find('[data-transport-rating]').first().attr('data-transport-rating')) || 0;
+                return ratingB - ratingA;
+            });
+        } else {
+            ordered = area.data('mptbmOriginalOrder');
+        }
+
+        var anchor = area.find('.geo-fence-no-transport').first();
+        ordered.forEach(function (el) {
+            if (anchor.length) {
+                $(el).insertBefore(anchor);
+            } else {
+                area.append(el);
+            }
+        });
+    }
+
+    $(document).ready(function () {
+        highlightBestPrice();
+        updateResultsCount();
+        if (typeof MutationObserver !== 'undefined') {
+            new MutationObserver(scheduleHighlight).observe(document.body, { childList: true, subtree: true });
+        }
+    });
+
+    $(document).on('change', '.mptbm_sort_select', function () {
+        var mainSection = $(this).closest('.mainSection');
+        sortVehicles(mainSection, $(this).val());
+    });
+
+    // Grid/List view toggle - purely a layout reflow of the same real cards,
+    // no data changes.
+    $(document).on('click', '.mptbm_results_view_toggle button', function () {
+        var $btn = $(this);
+        if ($btn.hasClass('is-active')) {
+            return;
+        }
+        var view = $btn.data('view');
+        var area = $btn.closest('.mainSection').find('.mp_sticky_depend_area').first();
+        $btn.siblings().removeClass('is-active');
+        $btn.addClass('is-active');
+        area.toggleClass('mptbm_view_grid', view === 'grid');
+        area.toggleClass('mptbm_view_list', view === 'list');
+    });
+})(jQuery);
+
+// Multi-row "Add Extra Stop" (.mptbm_extra_stops_wrapper in get_details.php).
+// This markup had no JS behind it at all - clicking "Add Extra Stop" did
+// nothing. Kept self-contained (own OSM search, not the shared
+// mptbm_setup_osm_autocomplete/mptbm_handle_osm_address_selection pair) since
+// those are hard-wired to the single start/end/legacy-extra marker slots and
+// reworking them for an arbitrary number of rows risked regressing the
+// pickup/dropoff autocomplete that already works.
+(function ($) {
+    "use strict";
+
+    // Both mptbm_set_cookie_distance_duration (Google) and
+    // mptbm_calculate_osm_distance (OSM) now read every current
+    // .mptbm_extra_stop_place_input / .mptbm_extra_stop_coords fresh from the
+    // DOM on each call - this just needs to trigger the right one whenever a
+    // stop is picked or removed, same as the existing start/end change handlers do.
+    function mptbmExtraStopTriggerRecalculation() {
+        var mapTypeEl = document.getElementById('mptbm_map_type');
+        if (mapTypeEl && mapTypeEl.value === 'openstreetmap') {
+            if (typeof mptbm_calculate_osm_distance === 'function') {
+                mptbm_calculate_osm_distance();
+            }
+            return;
+        }
+        var startInput = document.getElementById('mptbm_map_start_place') || document.getElementById('mptbm_manual_start_place');
+        var endInput = document.getElementById('mptbm_map_end_place') || document.getElementById('mptbm_manual_end_place');
+        if (typeof mptbm_set_cookie_distance_duration === 'function') {
+            mptbm_set_cookie_distance_duration(startInput ? startInput.value : '', endInput ? endInput.value : '');
+        }
+    }
+
+    function mptbmExtraStopMaxRows($wrapper) {
+        var max = parseInt($wrapper.attr('data-max-stops'), 10);
+        return max > 0 ? max : 3;
+    }
+
+    function mptbmExtraStopToggleAddLink($wrapper) {
+        var max = mptbmExtraStopMaxRows($wrapper);
+        var count = $wrapper.find('.mptbm_extra_stops_list').children('.mptbm_extra_stop_row').length;
+        $wrapper.find('.mptbm_add_extra_stop_row').toggle(count < max);
+    }
+
+    function mptbmExtraStopSearch(query, container, input, coordsInput) {
+        container.innerHTML = '<div style="padding: 9px 12px; color:#94a3b8; font-size:13px;">Searching&hellip;</div>';
+        container.style.display = 'block';
+
+        var body = new URLSearchParams();
+        body.append('action', 'mptbm_osm_search');
+        body.append('nonce', mptbm_ajax.osm_nonce);
+        body.append('q', query);
+
+        fetch(mptbm_ajax.ajax_url, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded',
+                'X-Requested-With': 'XMLHttpRequest'
+            },
+            body: body,
+            credentials: 'same-origin'
+        })
+            .then(function (response) { return response.json(); })
+            .then(function (response) {
+                // A slower-to-resolve older search (e.g. from a stop row the
+                // customer has since edited or moved on from) must not pop
+                // this dropdown back open with stale results out from under
+                // whatever they're doing now - bail if the field no longer
+                // holds the text this response was for.
+                if (input.value.trim() !== query) {
+                    return;
+                }
+
+                container.innerHTML = '';
+
+                if (!response.success || !response.data || !response.data.length) {
+                    container.innerHTML = '<div style="padding: 9px 12px; color:#94a3b8; font-size:13px;">No results found</div>';
+                    container.style.display = 'block';
+                    return;
+                }
+
+                response.data.forEach(function (result) {
+                    var item = document.createElement('div');
+                    item.style.cssText = 'display:flex; align-items:flex-start; gap:10px; padding:10px 12px; margin:2px 0; cursor:pointer; border-radius:10px; color:#0f172a; font-size:13.5px; font-weight:500; line-height:1.4;';
+
+                    var icon = document.createElement('i');
+                    icon.className = 'fas fa-map-marker-alt';
+                    icon.style.cssText = 'flex:0 0 auto; width:14px; margin-top:2px; color:#94a3b8; font-size:13px;';
+
+                    var text = document.createElement('span');
+                    text.textContent = result.display_name;
+                    text.style.cssText = 'flex:1 1 auto; min-width:0;';
+
+                    item.appendChild(icon);
+                    item.appendChild(text);
+
+                    item.addEventListener('click', function () {
+                        input.value = result.display_name;
+                        // Matches the "lat,lng" string format
+                        // get_server_distance_with_stops() parses from
+                        // mptbm_extra_stop_place_coordinates[].
+                        coordsInput.value = parseFloat(result.lat) + ',' + parseFloat(result.lon);
+                        container.style.display = 'none';
+
+                        // Drop/replace a pin for this specific row so the map
+                        // shows the stop, not just the bent route line.
+                        if (typeof mptbm_osm_map !== 'undefined' && mptbm_osm_map && typeof L !== 'undefined') {
+                            if (input._mptbmStopMarker) {
+                                mptbm_osm_map.removeLayer(input._mptbmStopMarker);
+                            }
+                            input._mptbmStopMarker = L.marker([parseFloat(result.lat), parseFloat(result.lon)], {
+                                title: result.display_name
+                            }).addTo(mptbm_osm_map).bindPopup(result.display_name);
+                        }
+
+                        mptbmExtraStopTriggerRecalculation();
+                    });
+                    item.addEventListener('mouseenter', function () { this.style.backgroundColor = '#f1f4f9'; });
+                    item.addEventListener('mouseleave', function () { this.style.backgroundColor = ''; });
+
+                    container.appendChild(item);
+                });
+            })
+            .catch(function () {
+                if (input.value.trim() !== query) {
+                    return;
+                }
+                container.innerHTML = '<div style="padding: 9px 12px; color:#dc2626; font-size:13px;">Search failed</div>';
+            });
+    }
+
+    function mptbmExtraStopSetupAutocomplete($row) {
+        var input = $row.find('.mptbm_extra_stop_place_input')[0];
+        var coordsInput = $row.find('.mptbm_extra_stop_coords')[0];
+        if (!input || !coordsInput) {
+            return;
+        }
+
+        var mapTypeEl = document.getElementById('mptbm_map_type');
+        var isOSM = !mapTypeEl || mapTypeEl.value === 'openstreetmap';
+
+        if (!isOSM) {
+            if (typeof google === 'undefined' || !google.maps || !google.maps.places) {
+                return;
+            }
+            var autocomplete = new google.maps.places.Autocomplete(input);
+            var restrict = $('[name="mptbm_restrict_search_country"]').val();
+            var country = $('[name="mptbm_country"]').val();
+            if (restrict === 'yes' && country) {
+                autocomplete.setComponentRestrictions({ country: [country] });
+            }
+            google.maps.event.addListener(autocomplete, 'place_changed', function () {
+                var place = autocomplete.getPlace();
+                if (place && place.geometry && place.geometry.location) {
+                    coordsInput.value = place.geometry.location.lat() + ',' + place.geometry.location.lng();
+                } else {
+                    coordsInput.value = '';
+                }
+                mptbmExtraStopTriggerRecalculation();
+            });
+            return;
+        }
+
+        var resultsContainer = document.createElement('div');
+        resultsContainer.className = 'mptbm-osm-autocomplete';
+        resultsContainer.style.cssText = 'position: fixed; box-sizing: border-box; font-size:14px; background: #fff; border: 1px solid #e7eaf0; border-radius: 14px; max-height: 240px; overflow-y: auto; z-index: 99999 !important; display: none; box-shadow: 0 10px 30px rgba(15, 23, 42, 0.12), 0 2px 8px rgba(15, 23, 42, 0.06); padding: 6px;';
+        document.body.appendChild(resultsContainer);
+        // Appended to body (so it can float over everything), not to the row
+        // itself - stash a reference so removing the row can clean this up
+        // too, instead of leaving an orphaned dropdown behind forever.
+        input._mptbmStopResultsContainer = resultsContainer;
+
+        function positionDropdown() {
+            var rect = input.getBoundingClientRect();
+            resultsContainer.style.top = (rect.bottom + 2) + 'px';
+            resultsContainer.style.left = rect.left + 'px';
+            resultsContainer.style.width = rect.width + 'px';
+        }
+
+        var debounceTimer = null;
+        input.addEventListener('input', function (e) {
+            clearTimeout(debounceTimer);
+            var query = e.target.value.trim();
+            coordsInput.value = '';
+            if (query.length < 3) {
+                resultsContainer.style.display = 'none';
+                return;
+            }
+            debounceTimer = setTimeout(function () {
+                positionDropdown();
+                mptbmExtraStopSearch(query, resultsContainer, input, coordsInput);
+            }, 300);
+        });
+
+        window.addEventListener('scroll', positionDropdown);
+        window.addEventListener('resize', positionDropdown);
+        document.addEventListener('click', function (e) {
+            if (e.target !== input && !resultsContainer.contains(e.target)) {
+                resultsContainer.style.display = 'none';
+            }
+        });
+    }
+
+    $(document).on('click', '.mptbm_add_extra_stop_row', function () {
+        var $wrapper = $(this).closest('.mptbm_extra_stops_wrapper');
+        var $list = $wrapper.find('.mptbm_extra_stops_list');
+
+        if ($list.children('.mptbm_extra_stop_row').length >= mptbmExtraStopMaxRows($wrapper)) {
+            return;
+        }
+
+        var template = $wrapper.find('#mptbm_extra_stop_row_template')[0];
+        if (!template || !template.content) {
+            return;
+        }
+
+        $list.append(template.content.cloneNode(true));
+        mptbmExtraStopSetupAutocomplete($list.children('.mptbm_extra_stop_row').last());
+        mptbmExtraStopToggleAddLink($wrapper);
+    });
+
+    $(document).on('click', '.mptbm_remove_extra_stop_row', function () {
+        var $wrapper = $(this).closest('.mptbm_extra_stops_wrapper');
+        var $row = $(this).closest('.mptbm_extra_stop_row');
+        var input = $row.find('.mptbm_extra_stop_place_input')[0];
+        var hadCoords = !!$row.find('.mptbm_extra_stop_coords').val();
+        if (input && input._mptbmStopMarker && typeof mptbm_osm_map !== 'undefined' && mptbm_osm_map) {
+            mptbm_osm_map.removeLayer(input._mptbmStopMarker);
+        }
+        if (input && input._mptbmStopResultsContainer && input._mptbmStopResultsContainer.parentNode) {
+            input._mptbmStopResultsContainer.parentNode.removeChild(input._mptbmStopResultsContainer);
+        }
+        $row.remove();
+        mptbmExtraStopToggleAddLink($wrapper);
+        if (hadCoords) {
+            mptbmExtraStopTriggerRecalculation();
+        }
+    });
+})(jQuery);
