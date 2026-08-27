@@ -947,11 +947,20 @@
             // Pricing model tabs: Fixed Zone vs Fixed With Map
             let $fixedWithMapTab = $('#mptbm_taxi_pricing_fixed_map');
             let $fixedZoneTab    = $('#mptbm_taxi_pricing_fixed_zone');
+            // "Operation Area Based Price Set" - belongs to the Fixed With Map model
+            // only. It rendered permanently visible (a PHP ternary there always
+            // resolved to 'block' regardless of price_based) and nothing here ever
+            // hid it again, so it stayed on screen even after picking the empty-value
+            // "Fixed Zone Operation Area" radio. Toggling it in the same places the
+            // two tabs already get shown/hidden keeps it in sync on both a live
+            // change and the initial togglePricingAreaButtons() call on page load.
+            let $areaBasedPriceSet = $('#mptbm_area_based_wrapper');
 
             if (!operationType) {
                 // Empty-value radio (or nothing checked): show Fixed Zone, hide Fixed With Map
                 $fixedWithMapTab.hide();
                 $fixedZoneTab.show();
+                $areaBasedPriceSet.hide();
 
                 if ($fixedWithMapTab.hasClass('active')) {
                     // Fixed With Map was active → hand off to Fixed Zone
@@ -971,10 +980,12 @@
                 // Geo-fence has no map/zone pricing model — hide both
                 $fixedWithMapTab.hide();
                 $fixedZoneTab.hide();
+                $areaBasedPriceSet.hide();
             } else {
                 // Any real value: show Fixed With Map, hide Fixed Zone
                 $fixedZoneTab.hide();
                 $fixedWithMapTab.show();
+                $areaBasedPriceSet.show();
                 if ($fixedZoneTab.hasClass('active')) {
                     $fixedZoneTab.removeClass('active');
                     $fixedWithMapTab.trigger('click');
@@ -983,6 +994,7 @@
                 // so Fixed With Map tab is also hidden in that combination
                 if (operationType === 'geo-matched-operation-area-type' && $zoneToZoneTab.hasClass('active')) {
                     $fixedWithMapTab.hide();
+                    $areaBasedPriceSet.hide();
                 }
             }
         }
@@ -1256,7 +1268,7 @@
                 <tr class="mptbm_taxi_ex_service_row">
                     <td class="mptbm_taxi_ex_service_icon_cell" data-label="Icon">
                         <div class="mp_add_icon_image_area fdColumn">
-                            <input type="hidden" name="mptbm_extra_service_icon[]" value=""/>
+                            <input type="hidden" name="service_icon[]" value=""/>
                             <div class="mp_icon_item dNone">
                                 <div class="allCenter">
                                     <span class="" data-add-icon></span>
@@ -1357,6 +1369,19 @@
             $control.find('.mptbm_date_toggle_status').text(
                 this.checked ? $control.data('enabled-label') : $control.data('disabled-label')
             );
+
+            // Schedule Date Configuration's header badge - stays visible even while
+            // .mptbm_schedule_card (the actual weekly table) is collapsed underneath,
+            // so it can explain *why* the table is hidden/shown instead of the whole
+            // section just vanishing with no context. See MPTBM_taxi_Date_Advanced_Settings.php.
+            const $badge = $('.mptbm_schedule_header_badge');
+            if ($badge.length) {
+                $badge.toggleClass('is-inactive', this.checked);
+                const label = this.checked ? $badge.data('hidden-label') : $badge.data('active-label');
+                $badge.contents().filter(function() {
+                    return this.nodeType === 3; // just the trailing text node, leave the dot span alone
+                }).last().replaceWith(document.createTextNode(' ' + label));
+            }
         });
 
         $(document).on('change', '.mptbm_off_days_conainer input[type="checkbox"]', function() {

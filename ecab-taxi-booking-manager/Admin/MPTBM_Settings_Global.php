@@ -50,6 +50,7 @@ if (!class_exists('MPTBM_Settings_Global')) {
 				'saveHint'           => esc_html__('Review your changes before saving.', 'ecab-taxi-booking-manager'),
 				'unsaved'            => esc_html__('Unsaved changes', 'ecab-taxi-booking-manager'),
 				'saving'             => esc_html__('Saving settings…', 'ecab-taxi-booking-manager'),
+				'highlightBadge'     => esc_html__('Often missed', 'ecab-taxi-booking-manager'),
 			));
 		}
 		public function global_settings_menu()
@@ -359,7 +360,10 @@ if (!class_exists('MPTBM_Settings_Global')) {
 					array(
 						'name' => 'enable_buffer_time',
 						'label' => $label . ' ' . esc_html__('Buffer Time', 'ecab-taxi-booking-manager'),
-						'desc' => esc_html__('Enter buffer time per minutes. Also you have to change the timezone from') . '<strong style="color: red;">' . esc_html__('Settings --> General --> Timezone', 'ecab-taxi-booking-manager') . '</strong>',
+						// Text domain was missing on the first half, so the sentence could never
+						// be translated and stayed English on localised sites while the red
+						// "Settings --> General --> Timezone" tail beside it did translate.
+						'desc' => esc_html__('Enter buffer time per minutes. Also you have to change the timezone from', 'ecab-taxi-booking-manager') . '<strong style="color: red;">' . esc_html__('WordPress Settings --> General --> Timezone', 'ecab-taxi-booking-manager') . '</strong>',
 						'type' => 'text',
 						'placeholder' => 'Ex:10'
 						),
@@ -488,11 +492,120 @@ if (!class_exists('MPTBM_Settings_Global')) {
 						)
 					),
 					array(
+						'name' => 'show_map_on_search_result',
+						// Highlighted row: this is the only way to hide the results map, and
+						// it is routinely looked for on the shortcode instead - the map=no
+						// attribute governs the pre-search form only, so people set that,
+						// see the map return the moment they hit Search, and conclude it is
+						// broken. See the .mptbm-setting-highlight rule in
+						// assets/admin/mptbm_global_settings.css.
+						'class' => 'mptbm-setting-highlight',
+						'label' => esc_html__('Show Map on Search Result Page', 'ecab-taxi-booking-manager'),
+						'desc' => esc_html__('Master switch for the route map on the vehicle search results. Select No to hide it everywhere, whatever the booking form or shortcode asks for. The shortcode\'s own map="no" only hides the map before a search is run - this is the setting that also hides it afterwards, on the results.', 'ecab-taxi-booking-manager'),
+						'type' => 'select',
+						'default' => 'yes',
+						'options' => array(
+							'yes' => esc_html__('Yes', 'ecab-taxi-booking-manager'),
+							'no' => esc_html__('No', 'ecab-taxi-booking-manager')
+						)
+					),
+					array(
 						'name' => 'gmap_api_key',
 						'label' => esc_html__('Google MAP API', 'ecab-taxi-booking-manager'),
 						'desc' => esc_html__('Please enter your Google Maps API key in this Options.', 'ecab-taxi-booking-manager') . '<a class="" href=' . $gm_api_url . ' target="_blank">Click Here to get google api key</a>',
 						'type' => 'text',
 						'default' => ''
+					),
+					array(
+						'name' => 'gmap_server_api_key',
+						'label' => esc_html__('Google MAP API Key (Server Side)', 'ecab-taxi-booking-manager'),
+						// Fares are calculated from a distance this site looks up itself, using
+						// Google's Distance Matrix/Directions Web Service APIs. Google rejects
+						// referrer-restricted keys on those APIs ("API keys with referer
+						// restrictions cannot be used with this API"), and a referrer restriction
+						// is the correct setting for the key above, which the browser uses. When
+						// the same restricted key is used for both, every server-side lookup is
+						// denied and pricing silently falls back to OSRM - a different road
+						// network, so a different distance than the map shows.
+						'desc' => esc_html__('Optional. Used only for the server-side distance lookup that fares are calculated from. Leave empty to reuse the key above. If the key above has HTTP referrer (website) restrictions, Google will reject it here, and trips get priced from the OpenStreetMap fallback instead - which can quote a noticeably different distance than the map shows. In that case add a second key restricted by IP address (or unrestricted) with the Distance Matrix API and Directions API enabled.', 'ecab-taxi-booking-manager'),
+						'type' => 'text',
+						'default' => ''
+					),
+					array(
+						'name' => 'fallback_routing_provider',
+						// This field does two different jobs depending on the map mode, so it
+						// says two different things. Under OpenStreetMap it IS the thing that
+						// measures every fare. Under Google map it is only a backup - which is
+						// not obvious from a bare "Routing Service" label sitting next to a
+						// Google API key, and reads as a competing setting. Both variants are
+						// rendered and assets/admin/mptbm_global_settings.js shows whichever
+						// matches the selected map mode (same approach as use_shortest_route).
+						'label' => sprintf(
+							'<span data-routing-label="openstreetmap">%1$s</span><span data-routing-label="enable" style="display:none">%2$s</span>',
+							esc_html__('Routing Service (distance measurement)', 'ecab-taxi-booking-manager'),
+							esc_html__('Backup Routing Service', 'ecab-taxi-booking-manager')
+						),
+						// OpenStreetMap's routing is free and needs no account, but it can only
+						// route over roads that have actually been mapped into OSM. Where a road
+						// is missing, the router detours around it and that detour is billed to
+						// the customer as real distance. TomTom runs its own road network, so it
+						// answers correctly there - and issues keys without a billing account,
+						// which is normally the real obstacle to a server-side key.
+						'desc' => sprintf(
+							'<span data-routing-desc="openstreetmap">%1$s</span><span data-routing-desc="enable" style="display:none">%2$s</span>',
+							esc_html__('Which service measures the driving distance that fares are calculated from. OpenStreetMap is free and needs no account, but it can only route over roads mapped into OpenStreetMap - where a road is missing it takes a long detour and the customer is charged for it. If the quoted distance is longer than the real route, switch to TomTom: a free key allows 2,500 requests per day, needs no credit card, and uses TomTom\'s own road data. Falls back to OpenStreetMap automatically if TomTom is unreachable.', 'ecab-taxi-booking-manager'),
+							esc_html__('Google measures the distance while it can, and this is only used when it cannot - most often because the Google key is restricted to your website, which Google does not accept for server-side requests. That fallback is silent, so leaving it on OpenStreetMap means fares can quietly be measured on roads OpenStreetMap has not mapped, and quoted longer than the real route. Set it to TomTom if the warning about the Google lookup ever appears.', 'ecab-taxi-booking-manager')
+						),
+						'type' => 'select',
+						'default' => 'osrm',
+						'options' => array(
+							'osrm' => esc_html__('OpenStreetMap / OSRM (free, no account)', 'ecab-taxi-booking-manager'),
+							'tomtom' => esc_html__('TomTom (free key, own road data - more accurate)', 'ecab-taxi-booking-manager'),
+						)
+					),
+					array(
+						'name' => 'tomtom_api_key',
+						'label' => esc_html__('TomTom API Key', 'ecab-taxi-booking-manager'),
+						'desc' => esc_html__('Required when the routing service above is set to TomTom. Get a free key at', 'ecab-taxi-booking-manager') . ' <a href="https://developer.tomtom.com/" target="_blank" rel="noopener">developer.tomtom.com</a> ' . esc_html__('- registration is free, no credit card is needed, and the free allowance is 2,500 requests per day. Enable the "Routing" API on the key.', 'ecab-taxi-booking-manager'),
+						'type' => 'text',
+						'default' => ''
+					),
+					array(
+						'name' => 'fare_distance_source',
+						'label' => esc_html__('Fare Distance Source', 'ecab-taxi-booking-manager'),
+						// The safe default is the server measuring the route itself, since
+						// nothing the customer sends can influence it. The 'browser' option is
+						// for sites whose only Google key is referrer-restricted: Google refuses
+						// those server-side, so every fare is silently priced off the
+						// OpenStreetMap fallback, which overcharges wherever OSM's road data is
+						// incomplete. See MPTBM_Transport_Search::resolve_trip_distance() and
+						// MPTBM_Function::validate_client_trip() for the bounds applied.
+						'desc' => esc_html__('Which distance the fare is calculated from. "Server" is the most tamper-proof and is recommended when you have a working server-side Google key. Choose "Browser" if you cannot add a server-side key: it prices the trip on the accurate distance Google already calculated in the customer\'s browser, after the server checks that figure against the straight-line distance and rejects anything shorter than physically possible. Use Browser when the fare does not match the distance shown on the map.', 'ecab-taxi-booking-manager'),
+						'type' => 'select',
+						'default' => 'server',
+						'options' => array(
+							'server' => esc_html__('Server (most secure, needs a server-side API key)', 'ecab-taxi-booking-manager'),
+							'browser' => esc_html__('Browser, verified server-side (no extra API key needed)', 'ecab-taxi-booking-manager'),
+						)
+					),
+					array(
+						'name' => 'use_shortest_route',
+						'label' => esc_html__('Use Shortest Distance Route', 'ecab-taxi-booking-manager'),
+						// Two variants, only one shown at a time - assets/admin/mptbm_global_settings.js
+						// toggles between them (by [data-shortest-route-desc]) as the select changes,
+						// so the description always reflects the currently-picked option instead of
+						// permanently listing both at once.
+						'desc' => sprintf(
+							'<span data-shortest-route-desc="no">%1$s</span><span data-shortest-route-desc="yes" style="display:none">%2$s</span>',
+							esc_html__('Price trips using the route Google/OSRM recommends as best (balances time and distance - generally the route a driver would actually navigate).', 'ecab-taxi-booking-manager'),
+							esc_html__('Compare all available route alternatives and always price the one with the smallest distance - this can lower quoted fares but may not match the route actually driven.', 'ecab-taxi-booking-manager')
+						),
+						'type' => 'select',
+						'default' => 'no',
+						'options' => array(
+							'no' => esc_html__('No (Recommended route)', 'ecab-taxi-booking-manager'),
+							'yes' => esc_html__('Yes (Always shortest distance)', 'ecab-taxi-booking-manager'),
+						)
 					),
 					array(
 						'name' => 'mp_latitude',

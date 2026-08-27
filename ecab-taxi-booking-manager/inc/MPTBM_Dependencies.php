@@ -16,6 +16,9 @@ if (!class_exists('MPTBM_Dependencies')) {
 		$this->init_rest_api();
 		add_action('admin_enqueue_scripts', array($this, 'admin_enqueue'), 80);
 		add_action('wp_enqueue_scripts', array($this, 'frontend_enqueue'), 80);
+		// Runs last so every other theme/plugin has already registered its scripts.
+		add_action('wp_enqueue_scripts', array($this, 'prevent_duplicate_google_maps_api'), 9999);
+		add_action('admin_enqueue_scripts', array($this, 'prevent_duplicate_google_maps_api'), 9999);
 		add_action('admin_head', array($this, 'js_constant'), 5);
 		add_action('wp_head', array($this, 'js_constant'), 5);
 		
@@ -99,6 +102,57 @@ if (!class_exists('MPTBM_Dependencies')) {
             wp_enqueue_style('mage-icons', MPTBM_PLUGIN_URL . '/assets/mage-icon/css/mage-icon.css', array(), $this->asset_ver('assets/mage-icon/css/mage-icon.css'));
         }
 
+        /**
+         * Google's JS API may only be loaded once per page. Themes and plugins
+         * routinely enqueue their own copy - Divi ships a `google-maps-api`
+         * handle built from its own Theme Options key, which is blank on most
+         * installs and yields `maps/api/js?v=3&key&ver=x`. Two loads on one page
+         * trigger Google's "included multiple times" error, and the keyless one
+         * raises InvalidKeyMapError against the shared window.google.maps
+         * namespace - greying out every map on the page, ours included.
+         *
+         * Dropping the rival handle outright would break anything declaring it a
+         * dependency (Divi's own map module does). So re-register it as a
+         * srcless alias of our loader instead: dependents still resolve, no
+         * second request goes out, and everyone shares our instance - which
+         * carries places+drawing+geometry, a superset of what those modules ask
+         * for.
+         *
+         * Only runs when our own loader is actually on the page, so sites using
+         * OpenStreetMap or a disabled map are left completely untouched.
+         *
+         * @return void
+         */
+        public function prevent_duplicate_google_maps_api()
+        {
+            if (!wp_script_is('mptbm_map_api', 'enqueued')) {
+                return;
+            }
+            $scripts = wp_scripts();
+            if (!$scripts || empty($scripts->registered)) {
+                return;
+            }
+
+            // Collect first - re-registering while iterating would mutate the array.
+            $duplicates = array();
+            foreach ($scripts->registered as $handle => $script) {
+                if ('mptbm_map_api' === $handle || empty($script->src)) {
+                    continue;
+                }
+                if (false !== strpos($script->src, 'maps.googleapis.com/maps/api/js')) {
+                    $duplicates[$handle] = (array) $script->deps;
+                }
+            }
+
+            foreach ($duplicates as $handle => $deps) {
+                $deps   = array_diff($deps, array($handle, 'mptbm_map_api'));
+                $deps[] = 'mptbm_map_api';
+                wp_deregister_script($handle);
+                // src of false = dependency-only alias; WordPress prints no tag for it.
+                wp_register_script($handle, false, array_values($deps), null, true);
+            }
+        }
+
         public function admin_enqueue()
         {
             $this->global_enqueue();
@@ -119,6 +173,12 @@ if (!class_exists('MPTBM_Dependencies')) {
 			wp_enqueue_script('mptbm_admin', MPTBM_PLUGIN_URL . '/assets/admin/mptbm_admin.js', array('jquery'), $this->asset_ver('assets/admin/mptbm_admin.js'), true);
 			wp_localize_script('mptbm_admin', 'mptbm_admin_security', array(
 				'extra_service_nonce' => wp_create_nonce('mptbm_get_extra_service'),
+				// The area-pricing save in mptbm_admin.js referenced a global (MPTBM_Ajax)
+				// that nothing ever localised, so it threw and the request never left the
+				// browser - while the handler itself accepted anything. Both halves are
+				// fixed together: the token is issued here and verified in
+				// MPTBM_Price_Settings::mptbm_operation_area_price_data_set().
+				'operation_area_price_nonce' => wp_create_nonce('mptbm_operation_area_price'),
 			));
             wp_enqueue_script('mptbm_tooltip', MPTBM_PLUGIN_URL . '/assets/admin/mptbm_tooltip.js', array('jquery', 'jquery-ui-tooltip'), $this->asset_ver('assets/admin/mptbm_tooltip.js'), true);
             wp_enqueue_script('mptbm_transportation_lists', MPTBM_PLUGIN_URL . '/assets/admin/mptbm_transportation_lists.js', array('jquery'), $this->asset_ver('assets/admin/mptbm_transportation_lists.js'), true);
@@ -193,12 +253,26 @@ if (!class_exists('MPTBM_Dependencies')) {
             wp_enqueue_script('mptbm_script', MPTBM_PLUGIN_URL . '/assets/frontend/mptbm_script.js', array('jquery'), time(), true);
             wp_enqueue_script('mptbm_registration', MPTBM_PLUGIN_URL . '/assets/frontend/mptbm_registration.js', array('jquery', 'flatpickr'), time(), true);
             wp_enqueue_style('mptbm_registration', MPTBM_PLUGIN_URL . '/assets/frontend/mptbm_registration.css', array(), time());
+            // Add Stoppage - kept in its own JS/CSS rather than merged into
+            // mptbm_registration.* since it's an independent, separately
+            // maintained feature (see Admin/MPTBM_Stoppages_Manager.php).
+            wp_enqueue_script('mptbm_stoppages', MPTBM_PLUGIN_URL . '/assets/frontend/mptbm_stoppages.js', array('jquery', 'mptbm_registration'), $this->asset_ver('assets/frontend/mptbm_stoppages.js'), true);
+            wp_enqueue_style('mptbm_stoppages', MPTBM_PLUGIN_URL . '/assets/frontend/mptbm_stoppages.css', array(), $this->asset_ver('assets/frontend/mptbm_stoppages.css'));
+            wp_localize_script('mptbm_stoppages', 'mptbm_stoppages_i18n', array(
+                'add' => esc_html__('Add this stop', 'ecab-taxi-booking-manager'),
+                'remove' => esc_html__('Remove this stop', 'ecab-taxi-booking-manager'),
+                'free' => esc_html__('Free', 'ecab-taxi-booking-manager'),
+                'badges' => array(
+                    'most_popular' => esc_html__('Most popular', 'ecab-taxi-booking-manager'),
+                    'recommended'  => esc_html__('Recommended', 'ecab-taxi-booking-manager'),
+                ),
+            ));
 			
 			// Localize script for AJAX
 			wp_localize_script('mptbm_registration', 'mptbm_ajax', array(
 				'ajax_url' => admin_url('admin-ajax.php'),
 				'osm_nonce' => wp_create_nonce('mptbm_osm_search'),
-				'search_nonce' => wp_create_nonce('mptbm_transport_search')
+				'search_nonce' => wp_create_nonce('mptbm_transport_search'),
 			));
             
             // Font Awesome for template icons

@@ -24,8 +24,74 @@ $map_type = MP_Global_Function::get_settings('mptbm_map_api_settings', 'display_
 
 $map = $map ?? 'yes';
 $map = strtolower($map); // Normalize the value to lowercase
+// Separate from $map above (which is the shortcode/block's own "map" option
+// and still only governs the pre-search form state): this is the global
+// admin switch (Map API Settings > Show Map on Search Result Page) that
+// controls the map specifically on the post-search results view, independent
+// of whatever the shortcode's map option was set to.
+$show_map_on_result = strtolower(MP_Global_Function::get_settings('mptbm_map_api_settings', 'show_map_on_search_result', 'yes'));
 
-$all_dates = MPTBM_Function::get_all_dates($price_based);
+$vehicle_id = isset($vehicle_id) ? absint($vehicle_id) : 0;
+$manual_route_map = $vehicle_id ? MP_Global_Function::get_post_info($vehicle_id, 'mptbm_manual_route_map', 'on') : 'on';
+$manual_map_enabled = $price_based === 'manual' && $manual_route_map !== 'off' && $map === 'yes' && $map_type !== 'disable';
+$manual_map_locations = array();
+
+if ($manual_map_enabled) {
+	$manual_vehicle_ids = $vehicle_id ? array($vehicle_id) : MP_Global_Function::get_all_post_id('mptbm_rent');
+	$seen_manual_locations = array();
+
+	foreach ($manual_vehicle_ids as $manual_vehicle_id) {
+		if (!$vehicle_id && MP_Global_Function::get_post_info($manual_vehicle_id, 'mptbm_price_based', '') !== 'manual') {
+			continue;
+		}
+
+		$manual_route_rows = array_merge(
+			(array) MP_Global_Function::get_post_info($manual_vehicle_id, 'mptbm_manual_price_info', array()),
+			(array) MP_Global_Function::get_post_info($manual_vehicle_id, 'mptbm_terms_price_info', array())
+		);
+
+		foreach ($manual_route_rows as $manual_route_row) {
+			foreach (array('start_location', 'end_location') as $location_field) {
+				$location_key = isset($manual_route_row[$location_field]) ? sanitize_text_field((string) $manual_route_row[$location_field]) : '';
+				if ($location_key === '' || isset($seen_manual_locations[$location_key])) {
+					continue;
+				}
+
+				$term = false;
+				if (strpos($location_key, 'term_') === 0) {
+					$term = get_term(absint(str_replace('term_', '', $location_key)), 'locations');
+				} else {
+					$term = get_term_by('slug', $location_key, 'locations');
+				}
+
+				$label = $term && !is_wp_error($term) ? $term->name : MPTBM_Function::get_taxonomy_name_by_slug($location_key, 'locations');
+				$label = $label ?: $location_key;
+				$latitude = null;
+				$longitude = null;
+
+				if ($term && !is_wp_error($term)) {
+					$geo_location = (string) get_term_meta($term->term_id, 'mptbm_geo_location', true);
+					$coordinates = array_map('trim', explode(',', $geo_location));
+					if (count($coordinates) === 2 && is_numeric($coordinates[0]) && is_numeric($coordinates[1])) {
+						$latitude = (float) $coordinates[0];
+						$longitude = (float) $coordinates[1];
+					}
+				}
+
+				$seen_manual_locations[$location_key] = true;
+				$manual_map_locations[] = array(
+					'key' => $location_key,
+					'label' => $label,
+					'lat' => $latitude,
+					'lng' => $longitude,
+				);
+			}
+		}
+	}
+}
+$all_dates = $vehicle_id
+	? MPTBM_Function::get_date($vehicle_id)
+	: MPTBM_Function::get_all_dates($price_based);
 $form_style = $form_style ?? 'horizontal';
 $disable_dropoff_hourly = MP_Global_Function::get_settings('mptbm_general_settings', 'disable_dropoff_hourly', 'enable');
 if ($price_based === 'fixed_hourly' && $disable_dropoff_hourly === 'disable') {
@@ -38,65 +104,97 @@ if ($price_based === 'fixed_hourly' && $disable_dropoff_hourly === 'disable') {
 $form_style_class = $form_style == 'horizontal' ? 'inputHorizontal' : 'inputInline';
 $area_class = $price_based == 'manual' ? ' ' : 'justifyBetween';
 $area_class = $form_style != 'horizontal' ? 'mptbm_form_details_area fdColumn' : $area_class;
-$mptbm_all_transport_id = MP_Global_Function::get_all_post_id('mptbm_rent');
-$mptbm_available_for_all_time = false;
+$mptbm_all_transport_id = $vehicle_id ? array($vehicle_id) : MP_Global_Function::get_all_post_id('mptbm_rent');
+// Pickup/return time options are built from the Schedule Date Configuration of the
+// vehicles actually in scope: just this one on a single-vehicle page, the whole
+// fleet on the global search form. Offering the full 24 hours regardless (what this
+// did before) let a customer pick 22:35 from a fleet that only runs 06:00-19:00 and
+// get "No Transport Available" with nothing explaining why - the hours were only
+// enforced later, at the results stage, in choose_vehicles.php.
+//
+// The reason it was turned off is real and is handled here: a vehicle set to
+// 24-Hour Availability stores no per-day times at all, so it used to contribute
+// nothing to the min/max and the picker collapsed to the hours of whichever
+// restricted vehicle did store times. Such a vehicle now explicitly contributes the
+// full day, so it widens the range instead of being invisible to it.
 $mptbm_schedule = [];
-$min_schedule_value = 0;
-$max_schedule_value = 24;
 $loop = 1;
 $day_specific_times = [];
 
-foreach ($mptbm_all_transport_id as $key => $value) {
-	if (MP_Global_Function::get_post_info($value, 'mptbm_available_for_all_time') == 'on') {
-		$mptbm_available_for_all_time = true;
+$mptbm_week_days = array_keys(MP_Global_Function::week_day());
+$mptbm_day_start = [];   // day => [start floats]
+$mptbm_day_end = [];     // day => [end floats]
+// The window a 24-hour (or overnight) vehicle contributes. Deliberately the same
+// 0.5-24 this form used to hard-code for everyone, so a site where every vehicle is
+// 24h keeps precisely the option list it has today and only sites that actually
+// configured a schedule see any change at all.
+$mptbm_full_day_start = 0.5;
+$mptbm_full_day_end = 24.0;
+
+foreach ($mptbm_all_transport_id as $mptbm_schedule_post_id) {
+	// Unset means 24h - the same default the toggle, the vehicle editor and
+	// wptbm_get_schedule() all use, so a vehicle that never saved the field is not
+	// silently treated as having no opening hours.
+	$mptbm_all_time = get_post_meta($mptbm_schedule_post_id, 'mptbm_available_for_all_time', true);
+	$mptbm_default_start = get_post_meta($mptbm_schedule_post_id, 'mptbm_default_start_time', true);
+	$mptbm_default_end = get_post_meta($mptbm_schedule_post_id, 'mptbm_default_end_time', true);
+
+	foreach ($mptbm_week_days as $mptbm_day) {
+		if ($mptbm_all_time === '' || $mptbm_all_time === 'on') {
+			$mptbm_day_start[$mptbm_day][] = $mptbm_full_day_start;
+			$mptbm_day_end[$mptbm_day][] = $mptbm_full_day_end;
+			continue;
+		}
+
+		$mptbm_day_start_time = get_post_meta($mptbm_schedule_post_id, 'mptbm_' . $mptbm_day . '_start_time', true);
+		$mptbm_day_end_time = get_post_meta($mptbm_schedule_post_id, 'mptbm_' . $mptbm_day . '_end_time', true);
+		if ($mptbm_day_start_time === '' || $mptbm_day_start_time === 'default') {
+			$mptbm_day_start_time = $mptbm_default_start;
+		}
+		if ($mptbm_day_end_time === '' || $mptbm_day_end_time === 'default') {
+			$mptbm_day_end_time = $mptbm_default_end;
+		}
+		if ($mptbm_day_start_time === '' || $mptbm_day_end_time === '') {
+			continue;
+		}
+
+		$mptbm_day_start_time = floatval($mptbm_day_start_time);
+		$mptbm_day_end_time = floatval($mptbm_day_end_time);
+		// An overnight window (22:00-06:00) wraps midnight and cannot be expressed as
+		// one linear min..max range - narrowing to 6..22 would hide exactly the hours
+		// the vehicle is open. Offer the full day and let choose_vehicles.php, which
+		// understands wrapping, do the filtering for this one.
+		if ($mptbm_day_start_time > $mptbm_day_end_time) {
+			$mptbm_day_start[$mptbm_day][] = $mptbm_full_day_start;
+			$mptbm_day_end[$mptbm_day][] = $mptbm_full_day_end;
+			continue;
+		}
+		$mptbm_day_start[$mptbm_day][] = $mptbm_day_start_time;
+		$mptbm_day_end[$mptbm_day][] = $mptbm_day_end_time;
 	}
 }
 
-if ($mptbm_available_for_all_time == false) {
-	$all_schedules = [];
-	$day_specific_times = [];
-	
-	foreach ($mptbm_all_transport_id as $key => $value) {
-		$transport_schedule = MPTBM_Function::get_schedule($value);
-		if (!empty($transport_schedule)) {
-			$all_schedules[] = $transport_schedule;
-		}
-	}
-	
-	// Process all schedules to find min/max times for each day
-	foreach ($all_schedules as $schedule) {
-		foreach ($schedule as $day => $times) {
-			if (is_array($times) && count($times) >= 2) {
-				$start_time = floatval($times[0]);
-				$end_time = floatval($times[1]);
-				
-				// Store times for each day
-				if (!isset($day_specific_times[$day])) {
-					$day_specific_times[$day] = ['start' => [], 'end' => []];
-				}
-				$day_specific_times[$day]['start'][] = $start_time;
-				$day_specific_times[$day]['end'][] = $end_time;
-			}
-		}
-	}
-	
-	// Calculate global min/max from all available times
-	$all_start_times = [];
-	$all_end_times = [];
-	foreach ($day_specific_times as $day => $times) {
-		$all_start_times = array_merge($all_start_times, $times['start']);
-		$all_end_times = array_merge($all_end_times, $times['end']);
-	}
-	
-	if (!empty($all_start_times) && !empty($all_end_times)) {
-		$min_schedule_value = min($all_start_times);
-		$max_schedule_value = max($all_end_times);
-	} else {
-		// If no schedules found, set default values
-		$min_schedule_value = 0.5; // 30 minutes
-		$max_schedule_value = 24;   // 24 hours
+// Shape the JS in this file's <script> block already expects: per weekday, the
+// list of every in-scope vehicle's opening and closing time. It takes min(start)
+// and max(end), so the picker spans the union - a time is offered when at least
+// one vehicle could serve it, never only when all of them can.
+foreach ($mptbm_week_days as $mptbm_day) {
+	if (!empty($mptbm_day_start[$mptbm_day]) && !empty($mptbm_day_end[$mptbm_day])) {
+		$day_specific_times[$mptbm_day] = array(
+			'start' => array_values($mptbm_day_start[$mptbm_day]),
+			'end'   => array_values($mptbm_day_end[$mptbm_day]),
+		);
 	}
 }
+
+// Range for the initial paint, before any date (and therefore any weekday) has
+// been chosen: the widest window across the whole week. Falls back to the old
+// full-day values when no vehicle has a usable schedule, so a site that has never
+// configured one behaves exactly as it did.
+$mptbm_all_starts = $mptbm_day_start ? array_merge(...array_values($mptbm_day_start)) : [];
+$mptbm_all_ends = $mptbm_day_end ? array_merge(...array_values($mptbm_day_end)) : [];
+$min_schedule_value = $mptbm_all_starts ? min($mptbm_all_starts) : 0.5;
+$max_schedule_value = $mptbm_all_ends ? max($mptbm_all_ends) : 24;
 // Ensure the schedule values are numeric
 $min_schedule_value = floatval($min_schedule_value);
 $max_schedule_value = floatval($max_schedule_value);
@@ -106,7 +204,9 @@ if (!function_exists('convertToMinutes')) {
 	{
 		$hours = floor($schedule_value); // Get the hour part
 		$minutes = ($schedule_value - $hours) * 100; // Convert decimal part to minutes
-		return $hours * 60 + $minutes;
+		// Rounded: 6.30 is stored as the float 6.3, and (6.3 - 6) * 100 lands on
+		// 30.000000000000004, which drags that noise through every loop bound below.
+		return (int) round($hours * 60 + $minutes);
 	}
 }
 
@@ -166,7 +266,7 @@ if (sizeof($all_dates) > 0) {
 	$mptbm_bags = [];
 	$mptbm_passengers = [];
 	$mptbm_hand_luggage = [];
-	$mptbm_all_transport_id = MP_Global_Function::get_all_post_id('mptbm_rent');
+	$mptbm_all_transport_id = $vehicle_id ? array($vehicle_id) : MP_Global_Function::get_all_post_id('mptbm_rent');
 	foreach ($mptbm_all_transport_id as $post_id) {
 		$bag = (int) get_post_meta($post_id, 'mptbm_maximum_bag', true);
 		$passenger = (int) get_post_meta($post_id, 'mptbm_maximum_passenger', true);
@@ -197,8 +297,10 @@ if (sizeof($all_dates) > 0) {
 			</div>
 			<div class="mpForm">
 				<input type="hidden" id="mptbm_km_or_mile" name="mptbm_km_or_mile" value="<?php echo esc_attr($km_or_mile); ?>" />
+				<input type="hidden" id="mptbm_use_shortest_route" value="<?php echo esc_attr(MP_Global_Function::get_settings('mptbm_map_api_settings', 'use_shortest_route', 'no')); ?>" />
 				<input type="hidden" name="mptbm_price_based" value="<?php echo esc_attr($price_based); ?>" />
 				<input type="hidden" name="mptbm_post_id" value="" />
+				<input type="hidden" name="mptbm_source_vehicle_id" value="<?php echo esc_attr($vehicle_id ?? 0); ?>" />
 				<input type='hidden' id="mptbm_enable_view_search_result_page" name="mptbm_enable_view_search_result_page" value="<?php echo MP_Global_Function::get_settings('mptbm_general_settings', 'enable_view_search_result_page') ?>" />
 				<input type='hidden' id="mptbm_enable_return_in_different_date" name="mptbm_enable_return_in_different_date" value="<?php echo MP_Global_Function::get_settings('mptbm_general_settings', 'enable_return_in_different_date') ?>" />
 				<input type='hidden' id="mptbm_enable_filter_via_features" name="mptbm_enable_filter_via_features" value="<?php echo MP_Global_Function::get_settings('mptbm_general_settings', 'enable_filter_via_features') ?>" />
@@ -313,7 +415,7 @@ if (sizeof($all_dates) > 0) {
 
 						if ($price_based == 'manual' || $price_based == 'fixed_zone') {
 						?>
-							<?php $all_start_locations = MPTBM_Function::get_all_start_location('', $price_based); ?>
+							<?php $all_start_locations = MPTBM_Function::get_all_start_location($vehicle_id ?? 0, $price_based); ?>
 							<select id="mptbm_manual_start_place" class="mptbm_manual_start_place formControl">
 								<option selected disabled><?php echo mptbm_get_translation('select_pick_up_location_label', __(' Select Pick-Up Location', 'ecab-taxi-booking-manager')); ?></option>
 								<?php if (sizeof($all_start_locations) > 0) { ?>
@@ -380,7 +482,7 @@ if (sizeof($all_dates) > 0) {
                 <option class="textCapitalize" selected disabled><?php echo mptbm_get_translation('select_destination_location_label', __(' Select Destination Location', 'ecab-taxi-booking-manager')); ?></option>
             </select>
         <?php } elseif ($price_based == 'fixed_zone_dropoff') { ?>
-            <?php $all_end_locations = MPTBM_Function::get_all_start_location('', $price_based); ?>
+            <?php $all_end_locations = MPTBM_Function::get_all_start_location($vehicle_id ?? 0, $price_based); ?>
             <select id="mptbm_manual_end_place" class="formControl mptbm_map_end_place">
                 <option selected disabled><?php echo mptbm_get_translation('select_destination_location_label', __(' Select Destination Location', 'ecab-taxi-booking-manager')); ?></option>
                 <?php if (sizeof($all_end_locations) > 0) { ?>
@@ -732,15 +834,27 @@ document.addEventListener('DOMContentLoaded', function() {
 		</style>
 		<?php endif; ?>
 		<span class="mptbm-map-warning" style="display:none"><?php _e('Map Authentication Failed! Please contact site admin.','ecab-taxi-booking-manager'); ?></span>
-		<div class="mptbm_map_area fdColumn" style="display: <?php echo (($price_based != 'manual') && $map === 'yes' && !($hide_dropoff && $price_based === 'fixed_hourly')) ? 'flex' : 'none'; ?>;">
+		<div class="mptbm_map_area fdColumn" data-map="<?php echo esc_attr($map); ?>" data-show-map-result="<?php echo esc_attr($show_map_on_result); ?>" data-manual-map="<?php echo $manual_map_enabled ? 'yes' : 'no'; ?>" style="display: <?php echo (($price_based !== 'manual' || $manual_map_enabled) && $map === 'yes' && !($hide_dropoff && $price_based === 'fixed_hourly')) ? 'flex' : 'none'; ?>;">
 			<div class="mptbm_map_area_header">
-				<h6><span class="fas fa-map-marked-alt mR_xs"></span><?php echo mptbm_get_translation('route_map_label', __('Route Map', 'ecab-taxi-booking-manager')); ?></h6>
+				<h6><span class="fas fa-map-marked-alt mR_xs"></span><?php echo $price_based === 'manual' ? esc_html__('Route Locations', 'ecab-taxi-booking-manager') : mptbm_get_translation('route_map_label', __('Route Map', 'ecab-taxi-booking-manager')); ?></h6>
 				<button type="button" class="mptbm_map_collapse_toggle" aria-expanded="true" data-expand-text="<?php esc_attr_e('Show Map', 'ecab-taxi-booking-manager'); ?>" data-collapse-text="<?php esc_attr_e('Hide Map', 'ecab-taxi-booking-manager'); ?>">
 					<span data-label><?php esc_html_e('Hide Map', 'ecab-taxi-booking-manager'); ?></span>
 					<i class="fas fa-chevron-up"></i>
 				</button>
 			</div>
 			<div class="mptbm_map_collapsible_body">
+				<?php if ($manual_map_enabled && !empty($manual_map_locations)) : ?>
+					<div class="mptbm_manual_map_legend" aria-label="<?php esc_attr_e('Configured route locations', 'ecab-taxi-booking-manager'); ?>">
+						<span class="mptbm_manual_map_legend_title"><i class="fas fa-map-marker-alt"></i> <?php esc_html_e('Available route locations', 'ecab-taxi-booking-manager'); ?></span>
+						<div class="mptbm_manual_map_location_pills">
+							<?php foreach ($manual_map_locations as $manual_map_location) : ?>
+								<span data-location-key="<?php echo esc_attr($manual_map_location['key']); ?>"><?php echo esc_html($manual_map_location['label']); ?></span>
+							<?php endforeach; ?>
+						</div>
+						<small class="mptbm_manual_map_status" aria-live="polite"><?php esc_html_e('Locating route points…', 'ecab-taxi-booking-manager'); ?></small>
+					</div>
+					<script type="application/json" class="mptbm-manual-map-locations"><?php echo wp_json_encode($manual_map_locations); ?></script>
+				<?php endif; ?>
 				<div class="fullHeight">
 					<?php if($map_type === 'openstreetmap'): ?>
 						<div id="mptbm_map_area"></div>
@@ -756,6 +870,7 @@ document.addEventListener('DOMContentLoaded', function() {
 						</div>
 					<?php endif; ?>
 				</div>
+				<?php if ($price_based !== 'manual' || $manual_map_enabled) : ?>
 				<div class="_dLayout mptbm_distance_time">
 					<div class="_equalChild_separatorRight">
 						<div class="_dFlex_pR_xs">
@@ -784,6 +899,7 @@ document.addEventListener('DOMContentLoaded', function() {
 						</div>
 					</div>
 				</div>
+				<?php endif; ?>
 			</div>
 			<div class="mptbm_inline_search_results">
 			<button type="button" class="mptbm_inline_results_reset" aria-label="<?php esc_attr_e('Reset search', 'ecab-taxi-booking-manager'); ?>" title="<?php esc_attr_e('Reset search', 'ecab-taxi-booking-manager'); ?>">
@@ -897,7 +1013,8 @@ document.addEventListener('DOMContentLoaded', function() {
 			// Add to return time list
 			jQuery('.return_time_list').append('<li data-value="' + dataValue.toFixed(2) + '" data-time="' + dataTime + '">' + timeFormatted + '</li>');
 		}
-		
+
+		jQuery(document).trigger('mptbm_time_options_updated');
 		
 	}
 	
