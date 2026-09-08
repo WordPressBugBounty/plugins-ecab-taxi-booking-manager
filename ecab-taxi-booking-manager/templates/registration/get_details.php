@@ -90,13 +90,49 @@ if ($manual_map_enabled) {
 	}
 }
 $all_dates = $vehicle_id
-	? MPTBM_Function::get_date($vehicle_id)
+	? MPTBM_Function::exclude_fully_booked_dates($vehicle_id, MPTBM_Function::get_date($vehicle_id))
 	: MPTBM_Function::get_all_dates($price_based);
+$pickup = isset($pickup) ? sanitize_text_field($pickup) : '';
+$dropoff = isset($dropoff) ? sanitize_text_field($dropoff) : '';
+// Accept either a bare term ID ("12") or the internal "term_12" format so the
+// shortcode author doesn't need to know the internal option-value format.
+$pickup_zone = isset($pickup_zone) ? sanitize_text_field($pickup_zone) : '';
+if ($pickup_zone !== '') {
+	$pickup_zone_id = absint(str_replace('term_', '', $pickup_zone));
+	$pickup_zone = $pickup_zone_id > 0 ? 'term_' . $pickup_zone_id : '';
+}
+$dropoff_zone = isset($dropoff_zone) ? sanitize_text_field($dropoff_zone) : '';
+if ($dropoff_zone !== '') {
+	$dropoff_zone_id = absint(str_replace('term_', '', $dropoff_zone));
+	$dropoff_zone = $dropoff_zone_id > 0 ? 'term_' . $dropoff_zone_id : '';
+}
+// Display-only stop names from the shortcode's `stops` attribute - text only,
+// never turned into coordinates, so they can never affect distance or price.
+$display_stops = isset($display_stops) && is_array($display_stops) ? $display_stops : array();
+// Shortcode's `route` attribute - lets a page (e.g. a landing page for one
+// specific tour) pre-select a fixed_route by name instead of making the
+// visitor pick it from the dropdown themselves.
+$route = isset($route) ? sanitize_text_field($route) : '';
 $form_style = $form_style ?? 'horizontal';
 $disable_dropoff_hourly = MP_Global_Function::get_settings('mptbm_general_settings', 'disable_dropoff_hourly', 'enable');
+// hide_dropoff hides the dropoff FIELD; hide_map_area is the separate
+// question of whether the map itself shows - fixed_route wants the first
+// (a named route already has its own end) but not the second (the map
+// previews the selected route's stops).
+$hide_map_area = false;
 if ($price_based === 'fixed_hourly' && $disable_dropoff_hourly === 'disable') {
     $form_style = 'inline';
     $map = 'no';
+    $hide_dropoff = true;
+    $hide_map_area = true;
+} elseif ($price_based === 'fixed_route') {
+    // A predefined named route (e.g. "Paris City Tour") already implies its
+    // own start and end - a separate dropoff field would be meaningless.
+    // Kept on the default horizontal sidebar+map layout (same as distance/
+    // fixed_map) rather than the compact inline flex-row: that row layout
+    // was tuned for fixed_hourly's smaller field set and left fixed_route's
+    // extra fields (route select, transfer type, waiting time, etc.)
+    // uncompensated, producing a ragged, uneven row.
     $hide_dropoff = true;
 } else {
     $hide_dropoff = false;
@@ -280,14 +316,18 @@ if (sizeof($all_dates) > 0) {
 	$max_hand_luggage = !empty($mptbm_hand_luggage) ? max($mptbm_hand_luggage) : 1;
 	
 	$disable_dropoff_hourly = MP_Global_Function::get_settings('mptbm_general_settings', 'disable_dropoff_hourly', 'enable');
+	$hide_map_area = false;
 	if ($price_based === 'fixed_hourly' && $disable_dropoff_hourly === 'disable') {
 	    $form_style = 'inline';
 	    $map = 'no';
 	    $hide_dropoff = true;
+	    $hide_map_area = true;
+	} elseif ($price_based === 'fixed_route') {
+	    $hide_dropoff = true;
 	} else {
 	    $hide_dropoff = false;
 	}
-?>	
+?>
 	<div class="<?php echo esc_attr($area_class); ?> ">
 	
 		<div class="_dLayout mptbm_search_area <?php echo esc_attr($form_style_class); ?> <?php echo esc_attr(($price_based == 'manual') ? 'mAuto' : ''); ?>">
@@ -382,7 +422,7 @@ if (sizeof($all_dates) > 0) {
 				</div>
 				<div class="inputList">
 					<label class="fdColumn ">
-						<span><?php echo mptbm_get_translation('pickup_location_label', __('Pickup Location', 'ecab-taxi-booking-manager')); ?></span>
+						<span><?php echo $price_based == 'fixed_route' ? mptbm_get_translation('route_label', __('Route', 'ecab-taxi-booking-manager')) : mptbm_get_translation('pickup_location_label', __('Pickup Location', 'ecab-taxi-booking-manager')); ?></span>
 						<?php
 						if (!function_exists('mptbm_resolve_location_label')) {
 							function mptbm_resolve_location_label($location_raw) {
@@ -415,9 +455,16 @@ if (sizeof($all_dates) > 0) {
 
 						if ($price_based == 'manual' || $price_based == 'fixed_zone') {
 						?>
-							<?php $all_start_locations = MPTBM_Function::get_all_start_location($vehicle_id ?? 0, $price_based); ?>
+							<?php
+							$all_start_locations = MPTBM_Function::get_all_start_location($vehicle_id ?? 0, $price_based);
+							// Only preselect when the requested zone is actually one of this
+							// search's real options - a bad/unconfigured term ID from the
+							// shortcode falls back to the original "please select" placeholder
+							// instead of silently selecting nothing that matches a price row.
+							$pickup_zone_matched = $pickup_zone !== '' && in_array($pickup_zone, $all_start_locations, true);
+							?>
 							<select id="mptbm_manual_start_place" class="mptbm_manual_start_place formControl">
-								<option selected disabled><?php echo mptbm_get_translation('select_pick_up_location_label', __(' Select Pick-Up Location', 'ecab-taxi-booking-manager')); ?></option>
+								<option <?php echo $pickup_zone_matched ? '' : 'selected '; ?>disabled><?php echo mptbm_get_translation('select_pick_up_location_label', __(' Select Pick-Up Location', 'ecab-taxi-booking-manager')); ?></option>
 								<?php if (sizeof($all_start_locations) > 0) { ?>
 									<?php foreach ($all_start_locations as $start_location) { ?>
 										<?php
@@ -431,15 +478,74 @@ if (sizeof($all_dates) > 0) {
 													$geo_coords = $geo_location; // format: "lat,lng"
 												}
 											}
+											$is_preselected_zone = $pickup_zone_matched && $start_location === $pickup_zone;
 										?>
-										<option class="textCapitalize" value="<?php echo esc_attr($start_location); ?>" <?php echo $geo_coords ? 'data-geo="' . esc_attr($geo_coords) . '"' : ''; ?> data-label="<?php echo esc_attr($start_label); ?>"><?php echo esc_html($start_label); ?></option>
+										<option class="textCapitalize" value="<?php echo esc_attr($start_location); ?>" <?php echo $geo_coords ? 'data-geo="' . esc_attr($geo_coords) . '"' : ''; ?> data-label="<?php echo esc_attr($start_label); ?>" <?php echo $is_preselected_zone ? 'selected' : ''; ?>><?php echo esc_html($start_label); ?></option>
 									<?php } ?>
 								<?php } ?>
 							</select>
 						<?php } elseif ($price_based == 'fixed_zone_dropoff') { ?>
-							<input type="text" id="mptbm_map_start_place" class="formControl" placeholder="<?php echo mptbm_get_translation('enter_pick_up_location_label', __('Enter Pick-Up Location', 'ecab-taxi-booking-manager')); ?>" value="" />
+							<input type="text" id="mptbm_map_start_place" class="formControl" placeholder="<?php echo mptbm_get_translation('enter_pick_up_location_label', __('Enter Pick-Up Location', 'ecab-taxi-booking-manager')); ?>" value="<?php echo esc_attr($pickup); ?>" />
+						<?php } elseif ($price_based == 'fixed_route') { ?>
+							<?php
+								$all_routes = MPTBM_Function::get_all_routes($vehicle_id ?? 0);
+								// Shortcode's `route` attribute pre-selects this route - only when it's
+								// actually one of this vehicle's real options, same safety rule as the
+								// fixed_zone pickup/dropoff zone pre-selection above.
+								$route_matched = $route !== '' && in_array($route, $all_routes, true);
+							?>
+							<!-- Deliberately its OWN id, not #mptbm_manual_start_place: that id is
+							also matched by a global "block the native dropdown, replace it with a
+							custom search wrapper" handler meant for manual mode's location picker
+							(mptbm_registration.js). This route select never gets that custom wrapper
+							built for it, so sharing the id made it silently unclickable/unreliable
+							for real mouse users - a plain native <select> works fine here as-is. -->
+							<select id="mptbm_route_select" class="formControl">
+								<option <?php echo $route_matched ? '' : 'selected '; ?>disabled><?php echo mptbm_get_translation('select_route_label', __(' Select a Route', 'ecab-taxi-booking-manager')); ?></option>
+								<?php foreach ($all_routes as $route_name) { ?>
+									<option class="textCapitalize" value="<?php echo esc_attr($route_name); ?>" <?php echo ($route_matched && $route_name === $route) ? 'selected' : ''; ?>><?php echo esc_html($route_name); ?></option>
+								<?php } ?>
+							</select>
+							<?php
+								// wp_json_encode() returns false (not a string) if the route
+								// name/waypoints contain invalid UTF-8 - a real risk, since
+								// this is free-text an admin can paste from anywhere (Word,
+								// Excel, etc. often leave behind invalid bytes). Echoing false
+								// prints nothing, which would otherwise leave a bare
+								// "window.mptbmRouteWaypoints = ;" - a hard JS syntax error
+								// that stops every other script on the page from running too.
+								$route_waypoints_map = MPTBM_Function::get_route_waypoints_map($vehicle_id ?? 0);
+								$route_waypoints_json = wp_json_encode($route_waypoints_map, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT);
+								if ($route_waypoints_json === false) {
+									$route_waypoints_json = '{}';
+								}
+								// Pre-selected route's stops, set as the SAME window.mptbmDisplayStops
+								// global the `stops` shortcode attribute already uses - the existing
+								// DOMContentLoaded dispatch (mptbm_registration.js) picks this up and
+								// plots it automatically, with no click needed. Only when actually
+								// matched; otherwise leave it for the generic `stops` attribute (if any)
+								// to set instead.
+								$initial_display_stops = ($route_matched && isset($route_waypoints_map[$route]))
+									? array_filter(array_map('trim', explode(',', $route_waypoints_map[$route])))
+									: array();
+								$initial_display_stops_json = wp_json_encode(array_values($initial_display_stops), JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT);
+								if ($initial_display_stops_json === false) {
+									$initial_display_stops_json = '[]';
+								}
+							?>
+							<script>
+								// Consumed by mptbm_registration.js: when the route dropdown
+								// changes, it looks up this route's waypoints and reuses the
+								// same display-only geocode+marker logic as the `stops`
+								// shortcode attribute - a map preview only, never fed into
+								// distance/price (the fixed price is already looked up by name).
+								window.mptbmRouteWaypoints = <?php echo $route_waypoints_json; ?>;
+								<?php if (!empty($initial_display_stops)) : ?>
+								window.mptbmDisplayStops = <?php echo $initial_display_stops_json; ?>;
+								<?php endif; ?>
+							</script>
 						<?php } else { ?>
-							<input type="text" id="mptbm_map_start_place" class="formControl" placeholder="<?php echo mptbm_get_translation('enter_pick_up_location_label', __('Enter Pick-Up Location', 'ecab-taxi-booking-manager')); ?>" value="" />
+							<input type="text" id="mptbm_map_start_place" class="formControl" placeholder="<?php echo mptbm_get_translation('enter_pick_up_location_label', __('Enter Pick-Up Location', 'ecab-taxi-booking-manager')); ?>" value="<?php echo esc_attr($pickup); ?>" />
 						<?php } ?>
 						<i class="fas fa-map-marker-alt mptbm_left_icon allCenter"></i>
 					</label>
@@ -448,7 +554,7 @@ if (sizeof($all_dates) > 0) {
 					$extra_stop = MP_Global_Function::get_settings('mptbm_general_settings', 'mptbm_extra_stop_between_pickup_dropoff', 'no');
 					$max_extra_stops = (int) MP_Global_Function::get_settings('mptbm_general_settings', 'mptbm_max_extra_stops', 3);
 					$max_extra_stops = $max_extra_stops > 0 ? $max_extra_stops : 3;
-					$excluded_price_based = ['fixed_zone', 'fixed_zone_dropoff', 'fixed_hourly', 'fixed_price', 'fixed_zone_pickup', 'manual'];
+					$excluded_price_based = ['fixed_zone', 'fixed_zone_dropoff', 'fixed_hourly', 'fixed_price', 'fixed_zone_pickup', 'manual', 'fixed_route'];
 					if ($extra_stop == 'yes' && !in_array($price_based, $excluded_price_based)) {
 				?>
 					<div class="inputList mptbm_extra_stops_wrapper" data-max-stops="<?php echo esc_attr($max_extra_stops); ?>">
@@ -473,7 +579,7 @@ if (sizeof($all_dates) > 0) {
 						</template>
 					</div>
 				<?php } ?>
-				<?php if (!($hide_dropoff && $price_based === 'fixed_hourly')): ?>
+				<?php if (!($hide_dropoff)): ?>
 <div class="inputList">
     <label class="fdColumn mptbm_manual_end_place">
         <span><?php echo mptbm_get_translation('dropoff_location_label', __('Drop-Off Location', 'ecab-taxi-booking-manager')); ?></span>
@@ -482,9 +588,14 @@ if (sizeof($all_dates) > 0) {
                 <option class="textCapitalize" selected disabled><?php echo mptbm_get_translation('select_destination_location_label', __(' Select Destination Location', 'ecab-taxi-booking-manager')); ?></option>
             </select>
         <?php } elseif ($price_based == 'fixed_zone_dropoff') { ?>
-            <?php $all_end_locations = MPTBM_Function::get_all_start_location($vehicle_id ?? 0, $price_based); ?>
+            <?php
+            $all_end_locations = MPTBM_Function::get_all_start_location($vehicle_id ?? 0, $price_based);
+            // Same safety rule as the pickup zone select: only preselect when the
+            // requested zone is actually one of this search's real options.
+            $dropoff_zone_matched = $dropoff_zone !== '' && in_array($dropoff_zone, $all_end_locations, true);
+            ?>
             <select id="mptbm_manual_end_place" class="formControl mptbm_map_end_place">
-                <option selected disabled><?php echo mptbm_get_translation('select_destination_location_label', __(' Select Destination Location', 'ecab-taxi-booking-manager')); ?></option>
+                <option <?php echo $dropoff_zone_matched ? '' : 'selected '; ?>disabled><?php echo mptbm_get_translation('select_destination_location_label', __(' Select Destination Location', 'ecab-taxi-booking-manager')); ?></option>
                 <?php if (sizeof($all_end_locations) > 0) { ?>
                     <?php foreach ($all_end_locations as $end_location) { ?>
                         <?php
@@ -497,13 +608,14 @@ if (sizeof($all_dates) > 0) {
                                     $geo_coords = $geo_location;
                                 }
                             }
+                            $is_preselected_zone = $dropoff_zone_matched && $end_location === $dropoff_zone;
                         ?>
-                        <option class="textCapitalize" value="<?php echo esc_attr($end_location); ?>" <?php echo $geo_coords ? 'data-geo="' . esc_attr($geo_coords) . '"' : ''; ?> data-label="<?php echo esc_attr($end_label); ?>"><?php echo esc_html($end_label); ?></option>
+                        <option class="textCapitalize" value="<?php echo esc_attr($end_location); ?>" <?php echo $geo_coords ? 'data-geo="' . esc_attr($geo_coords) . '"' : ''; ?> data-label="<?php echo esc_attr($end_label); ?>" <?php echo $is_preselected_zone ? 'selected' : ''; ?>><?php echo esc_html($end_label); ?></option>
                     <?php } ?>
                 <?php } ?>
             </select>
         <?php } else { ?>
-            <input type="text" id="mptbm_map_end_place" class="formControl textCapitalize" placeholder="<?php echo mptbm_get_translation('enter_dropoff_location_placeholder', __(' Enter Drop-Off Location', 'ecab-taxi-booking-manager')); ?>" value="" />
+            <input type="text" id="mptbm_map_end_place" class="formControl textCapitalize" placeholder="<?php echo mptbm_get_translation('enter_dropoff_location_placeholder', __(' Enter Drop-Off Location', 'ecab-taxi-booking-manager')); ?>" value="<?php echo esc_attr($dropoff); ?>" />
         <?php } ?>
         <i class="fas fa-map-marker-alt mptbm_left_icon allCenter"></i>
     </label>
@@ -511,19 +623,328 @@ if (sizeof($all_dates) > 0) {
 <?php else: ?>
 <input type="hidden" id="mptbm_map_end_place" />
 <?php endif; ?>
+<?php if (!empty($display_stops)): ?>
+<div class="mptbm_display_only_stops" style="margin:6px 0 14px;font-size:13px;color:#6b7280;">
+    <strong style="color:#374151;"><?php echo mptbm_get_translation('via_stops_label', __('Via:', 'ecab-taxi-booking-manager')); ?></strong>
+    <?php echo esc_html(implode(', ', $display_stops)); ?>
+</div>
+<?php
+    // See the fixed_route waypoints block above for why this guards against
+    // wp_json_encode() returning false (invalid UTF-8 in the shortcode's
+    // `stops` text) instead of echoing it directly.
+    $display_stops_json = wp_json_encode(array_values($display_stops), JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT);
+    if ($display_stops_json === false) {
+        $display_stops_json = '[]';
+    }
+?>
+<script>
+    // Consumed by mptbm_registration.js to drop a marker for each name on
+    // whichever map is active - display only, never fed into the routed
+    // waypoint list, so distance/price stay based on pickup/dropoff alone.
+    window.mptbmDisplayStops = <?php echo $display_stops_json; ?>;
+</script>
+<?php endif; ?>
 <input type="hidden" name="mptbm_original_price_base" value="<?php echo esc_attr($price_based); ?>" />
-<?php if ($hide_dropoff && $price_based === 'fixed_hourly') : ?>
+<?php if ($hide_dropoff) : ?>
 <script>
 document.addEventListener('DOMContentLoaded', function() {
-    var pickup = document.getElementById('mptbm_map_start_place');
+    // fixed_hourly's pickup is the #mptbm_map_start_place text input; fixed_route's
+    // is the #mptbm_route_select route <select> instead - check both so this
+    // sync works for either mode that hides the dropoff field.
+    var pickup = document.getElementById('mptbm_map_start_place') || document.getElementById('mptbm_route_select');
     var dropoff = document.getElementById('mptbm_map_end_place');
     if (pickup && dropoff) {
         function syncDropoff() {
             dropoff.value = pickup.value;
         }
         pickup.addEventListener('input', syncDropoff);
+        pickup.addEventListener('change', syncDropoff);
         syncDropoff();
     }
+});
+</script>
+<?php endif; ?>
+<?php if ($pickup !== '' || $dropoff !== '') : ?>
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    // Shortcode-supplied pickup/dropoff values were written straight into the
+    // input value attributes above (no user interaction happened), so nothing
+    // that normally listens for typing/selecting a place has fired yet. jQuery's
+    // delegated change handlers here only react to jQuery's own trigger(), not
+    // a plain native dispatchEvent - use jQuery (already loaded plugin-wide) so
+    // this fires exactly as if the visitor had entered these values.
+    //
+    // Note: this file's inline <script> blocks deliberately avoid the
+    // logical-AND operator (nested ifs / .every(Boolean) instead). Something
+    // in this site's output pipeline sporadically HTML-entity-encodes that
+    // bare double-ampersand token inside a <script> tag, which is a JS syntax
+    // error that silently kills the whole block - it hit this plugin's own
+    // pre-existing day-specific-time-range script the same way. Avoiding the
+    // token here sidesteps that bug rather than depending on a fix elsewhere.
+    var pickupField = document.getElementById('mptbm_map_start_place');
+    var dropoffField = document.getElementById('mptbm_map_end_place');
+    if ([pickupField, pickupField ? pickupField.value : null, typeof jQuery !== 'undefined'].every(Boolean)) {
+        jQuery(pickupField).trigger('change');
+    }
+    if ([dropoffField, dropoffField ? dropoffField.value : null, typeof jQuery !== 'undefined'].every(Boolean)) {
+        jQuery(dropoffField).trigger('change');
+    }
+
+    <?php if ($pickup !== '' && $dropoff !== '') : ?>
+    // Draw the route on the preview map immediately. Normally the route only
+    // draws once the visitor picks a suggestion from the address autocomplete
+    // (place_changed for Google, the OSM suggestion click for OpenStreetMap) -
+    // with both ends already supplied by the shortcode, no such selection ever
+    // happens, so it's triggered here using the same functions those selection
+    // handlers call.
+    (function () {
+        var pickupText = <?php echo wp_json_encode($pickup); ?>;
+        var dropoffText = <?php echo wp_json_encode($dropoff); ?>;
+
+        function isOsmMode() {
+            var mapType = document.getElementById('mptbm_map_type');
+            if (!mapType) return false;
+            return mapType.value === 'openstreetmap';
+        }
+
+        // OSRM (the OSM route engine) needs actual coordinates, unlike
+        // Google's Directions API, which can resolve plain address text on
+        // its own - so the OSM path geocodes each address first via the
+        // same admin-ajax proxy the plugin already uses elsewhere.
+        function geocodeOsm(address, callback) {
+            var url = mptbm_ajax.ajax_url + '?action=mptbm_osm_search&nonce=' + mptbm_ajax.osm_nonce + '&q=' + encodeURIComponent(address);
+            fetch(url).then(function (r) { return r.json(); }).then(function (res) {
+                var hasResults = false;
+                if ([res, res ? res.success : null, res ? res.data : null].every(Boolean)) {
+                    hasResults = res.data.length > 0;
+                }
+                if (hasResults) {
+                    callback({ lat: res.data[0].lat, lon: res.data[0].lon, display_name: res.data[0].display_name || address });
+                } else {
+                    callback(null);
+                }
+            }).catch(function () { callback(null); });
+        }
+
+        // Pickup and dropoff don't depend on each other, so geocode both at
+        // once instead of one after the other - roughly halves the time
+        // before the preview route appears (was ~2 sequential round-trips
+        // to the geocoder before the OSRM call could even start).
+        function drawOsmRoute() {
+            var startResult = null;
+            var endResult = null;
+            var startDone = false;
+            var endDone = false;
+
+            function tryDraw() {
+                if (!startDone) return;
+                if (!endDone) return;
+                if (!startResult) return;
+                if (!endResult) return;
+                drawOsmMarkersAndRoute(startResult, endResult);
+            }
+
+            geocodeOsm(pickupText, function (start) {
+                startResult = start;
+                startDone = true;
+                tryDraw();
+            });
+            geocodeOsm(dropoffText, function (end) {
+                endResult = end;
+                endDone = true;
+                tryDraw();
+            });
+        }
+
+        // A trimmed, visual-only version of the plugin's own OSM route
+        // drawing (mptbm_calculate_osm_distance() in mptbm_registration.js,
+        // which mptbm_handle_osm_address_selection() would otherwise call).
+        // That shared function also calls mptbm_sync_distance_from_server(),
+        // which re-verifies the distance through this site's own server -
+        // and with a Google key configured under Map API Settings, that
+        // hits Google's paid Distance Matrix API. Deliberately not reusing
+        // it here: with both ends supplied by the shortcode (no visitor
+        // interaction happened yet), every single page view would silently
+        // spend a Google API call before anyone expressed real intent to
+        // book. This draws the same marker + route preview using only the
+        // free, public OSRM router - the actual verified distance/price
+        // (Google if configured, OSRM otherwise) still runs normally the
+        // moment the visitor clicks Search, exactly like any other booking.
+        function drawOsmMarkersAndRoute(start, end) {
+            if (typeof mptbm_ensure_osm_map_ready === 'function') {
+                mptbm_ensure_osm_map_ready();
+            }
+            if (typeof L === 'undefined') return;
+            if (!mptbm_osm_map) return;
+
+            if (mptbm_osm_start_marker) { mptbm_osm_map.removeLayer(mptbm_osm_start_marker); }
+            if (mptbm_osm_end_marker) { mptbm_osm_map.removeLayer(mptbm_osm_end_marker); }
+
+            var startLat = parseFloat(start.lat);
+            var startLng = parseFloat(start.lon);
+            var endLat = parseFloat(end.lat);
+            var endLng = parseFloat(end.lon);
+
+            mptbm_osm_start_marker = L.marker([startLat, startLng]).addTo(mptbm_osm_map);
+            mptbm_osm_start_marker.bindPopup(start.display_name);
+            mptbm_osm_end_marker = L.marker([endLat, endLng]).addTo(mptbm_osm_map);
+            mptbm_osm_end_marker.bindPopup(end.display_name);
+
+            // Same public OSRM endpoint mptbm_calculate_osm_distance() uses for
+            // the drawn shape - free, no key, not the site's own paid Google
+            // lookup.
+            var osrmUrl = 'https://router.project-osrm.org/route/v1/driving/'
+                + startLng + ',' + startLat + ';' + endLng + ',' + endLat
+                + '?overview=full&geometries=geojson';
+
+            fetch(osrmUrl).then(function (r) { return r.json(); }).then(function (data) {
+                var hasRoute = false;
+                if ([data, data ? data.code : null, data ? data.routes : null].every(Boolean)) {
+                    hasRoute = data.code === 'Ok' ? data.routes.length > 0 : false;
+                }
+                if (!hasRoute) return;
+
+                var route = data.routes[0];
+                var coordinates = route.geometry.coordinates.map(function (coord) {
+                    return [coord[1], coord[0]];
+                });
+
+                if (mptbm_osm_route) { mptbm_osm_map.removeLayer(mptbm_osm_route); }
+                mptbm_osm_route = L.polyline(coordinates, { color: '#ff4757', weight: 4, opacity: 0.9 }).addTo(mptbm_osm_map);
+                mptbm_osm_map.fitBounds(mptbm_osm_route.getBounds().pad(0.1));
+
+                var distanceKm = route.distance / 1000;
+                var kmOrMileEl = document.getElementById('mptbm_km_or_mile');
+                var kmOrMile = kmOrMileEl ? kmOrMileEl.value : 'km';
+                var distanceText = kmOrMile === 'mile'
+                    ? (distanceKm * 0.621371).toFixed(1) + ' MILE'
+                    : distanceKm.toFixed(1) + ' KM';
+
+                var durationMin = Math.round(route.duration / 60);
+                var hours = Math.floor(durationMin / 60);
+                var minutes = durationMin % 60;
+                var durationText = hours > 0 ? (hours + ' Hour ' + minutes + ' Min') : (minutes + ' Min');
+
+                var currentMapWrap = typeof mptbm_get_current_map_wrap === 'function' ? mptbm_get_current_map_wrap() : null;
+                if (currentMapWrap) {
+                    var distanceEl = currentMapWrap.querySelector('.mptbm_total_distance');
+                    if (distanceEl) { distanceEl.textContent = ' ' + distanceText; }
+                    var timeEl = currentMapWrap.querySelector('.mptbm_total_time');
+                    if (timeEl) { timeEl.textContent = durationText; }
+                    if (typeof jQuery !== 'undefined') {
+                        jQuery(currentMapWrap).find('.mptbm_distance_time').slideDown('fast');
+                    }
+                }
+            }).catch(function () { });
+        }
+
+        function drawGoogleRoute() {
+            if (typeof mptbm_set_cookie_distance_duration === 'function') {
+                mptbm_set_cookie_distance_duration(pickupText, dropoffText);
+            }
+        }
+
+        var attempts = 0;
+        function waitForMapThenDraw() {
+            attempts++;
+            if (isOsmMode()) {
+                if (typeof L !== 'undefined') {
+                    drawOsmRoute();
+                    return;
+                }
+            } else if (typeof google !== 'undefined' ? google.maps : false) {
+                drawGoogleRoute();
+                return;
+            }
+            if (attempts < 25) {
+                setTimeout(waitForMapThenDraw, 200);
+            }
+        }
+        waitForMapThenDraw();
+    })();
+    <?php endif; ?>
+});
+</script>
+<?php endif; ?>
+<?php if ($pickup_zone_matched ?? false) : ?>
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+    // The matching <option> above already has the "selected" attribute, but
+    // nothing that reacts to a real user pick (placing the zone marker,
+    // storing its coordinates) has run yet - dispatch the same 'change' this
+    // dropdown fires on a manual selection so that existing logic does.
+    var zoneSelect = document.getElementById('mptbm_manual_start_place');
+    var zoneValue = <?php echo wp_json_encode($pickup_zone); ?>;
+    if (!zoneSelect) return;
+    if (zoneSelect.value !== zoneValue) return;
+
+    function isOsmMode() {
+        var mapType = document.getElementById('mptbm_map_type');
+        if (!mapType) return false;
+        return mapType.value === 'openstreetmap';
+    }
+
+    // The existing change-handler for this dropdown places the zone marker
+    // only when the map object already exists, with no lazy init fallback
+    // (unlike the autocomplete-selection path, which calls
+    // mptbm_ensure_osm_map_ready() first) - dispatching before the map has
+    // finished initializing would silently drop the marker. Wait for it.
+    var mapAttempts = 0;
+    function waitForMapThenDispatch() {
+        mapAttempts++;
+        var mapReady = isOsmMode()
+            ? (typeof mptbm_osm_map !== 'undefined' ? !!mptbm_osm_map : false)
+            : (typeof mptbm_map !== 'undefined' ? !!mptbm_map : false);
+        if (mapReady) {
+            // jQuery's delegated change handler for this dropdown (the one
+            // that places the zone marker) only reacts to jQuery's own
+            // trigger(), not a plain native dispatchEvent.
+            if (typeof jQuery !== 'undefined') {
+                jQuery(zoneSelect).trigger('change');
+            }
+            return;
+        }
+        if (mapAttempts < 25) {
+            setTimeout(waitForMapThenDispatch, 200);
+        }
+    }
+    waitForMapThenDispatch();
+});
+</script>
+<?php endif; ?>
+<?php if ($dropoff_zone_matched ?? false) : ?>
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+    // Mirrors the pickup_zone block above, for fixed_zone_dropoff's dropoff
+    // dropdown instead of the pickup one.
+    var zoneSelect = document.getElementById('mptbm_manual_end_place');
+    var zoneValue = <?php echo wp_json_encode($dropoff_zone); ?>;
+    if (!zoneSelect) return;
+    if (zoneSelect.value !== zoneValue) return;
+
+    function isOsmMode() {
+        var mapType = document.getElementById('mptbm_map_type');
+        if (!mapType) return false;
+        return mapType.value === 'openstreetmap';
+    }
+
+    var mapAttempts = 0;
+    function waitForMapThenDispatch() {
+        mapAttempts++;
+        var mapReady = isOsmMode()
+            ? (typeof mptbm_osm_map !== 'undefined' ? !!mptbm_osm_map : false)
+            : (typeof mptbm_map !== 'undefined' ? !!mptbm_map : false);
+        if (mapReady) {
+            if (typeof jQuery !== 'undefined') {
+                jQuery(zoneSelect).trigger('change');
+            }
+            return;
+        }
+        if (mapAttempts < 25) {
+            setTimeout(waitForMapThenDispatch, 200);
+        }
+    }
+    waitForMapThenDispatch();
 });
 </script>
 <?php endif; ?>
@@ -708,16 +1129,29 @@ document.addEventListener('DOMContentLoaded', function() {
 						</select>
 					</div>
 				<?php } ?>
-				<?php if ($price_based == 'fixed_hourly') {
-					$minimum_booking_hours = MP_Global_Function::get_settings('mptbm_general_settings', 'minimum_booking_hours', '0');
-					$minimum_booking_hours = intval($minimum_booking_hours);
-					$max_hours = 12; // Maximum hours to show in dropdown
+				<?php if ($price_based == 'fixed_hourly' || $price_based == 'fixed_daily') {
+					$mptbm_is_daily_pricing = ($price_based == 'fixed_daily');
+					if ($mptbm_is_daily_pricing) {
+						$minimum_booking_hours = MP_Global_Function::get_settings('mptbm_general_settings', 'minimum_booking_days', '1');
+						$minimum_booking_hours = max(1, intval($minimum_booking_hours));
+						$max_hours = 30; // Maximum days to show in dropdown
+					} else {
+						$minimum_booking_hours = MP_Global_Function::get_settings('mptbm_general_settings', 'minimum_booking_hours', '0');
+						$minimum_booking_hours = intval($minimum_booking_hours);
+						$max_hours = 12; // Maximum hours to show in dropdown
+					}
 					// If setting is 0 (disabled), start from 1 hour
 					$start_hours = ($minimum_booking_hours == 0) ? 1 : $minimum_booking_hours;
 				?>
 					<?php
 						$hour_labels = array();
 						for ($i = $start_hours; $i <= $max_hours; $i++) {
+							if ($mptbm_is_daily_pricing) {
+								$hour_labels[$i] = ($i == 1)
+									? mptbm_get_translation('one_day_label', __('1 Day', 'ecab-taxi-booking-manager'))
+									: sprintf(__('%d Days', 'ecab-taxi-booking-manager'), $i);
+								continue;
+							}
 							switch ($i) {
 								case 1: $hour_labels[$i] = mptbm_get_translation('one_hour_label', __('1 Hour', 'ecab-taxi-booking-manager')); break;
 								case 2: $hour_labels[$i] = mptbm_get_translation('two_hours_label', __('2 Hours', 'ecab-taxi-booking-manager')); break;
@@ -738,7 +1172,7 @@ document.addEventListener('DOMContentLoaded', function() {
 					<div class="inputList mp_input_select">
 						<input type="hidden" name="mptbm_fixed_hours" id="mptbm_fixed_hours" value="<?php echo esc_attr($start_hours); ?>" />
 						<label class="fdColumn">
-							<span><?php echo mptbm_get_translation('select_hours_label', __('Select Hours', 'ecab-taxi-booking-manager')); ?></span>
+							<span><?php echo $mptbm_is_daily_pricing ? mptbm_get_translation('select_days_label', __('Select Days', 'ecab-taxi-booking-manager')) : mptbm_get_translation('select_hours_label', __('Select Hours', 'ecab-taxi-booking-manager')); ?></span>
 							<input type="text" class="formControl" value="<?php echo esc_attr($hour_labels[$start_hours]); ?>" readonly />
 							<i class="far fa-clock mptbm_left_icon allCenter"></i>
 						</label>
@@ -776,13 +1210,13 @@ document.addEventListener('DOMContentLoaded', function() {
 					</button>
 				</div>
 				<?php if ($form_style != 'horizontal') { ?>
-					<?php if ($taxi_return != 'enable' && $price_based != 'fixed_hourly') { ?>
+					<?php if ($taxi_return != 'enable' && $price_based != 'fixed_hourly' && $price_based != 'fixed_daily') { ?>
 						<div class="inputList"></div>
 					<?php } ?>
-					<?php if ($waiting_time_check != 'enable' && $price_based != 'fixed_hourly') { ?>
+					<?php if ($waiting_time_check != 'enable' && $price_based != 'fixed_hourly' && $price_based != 'fixed_daily') { ?>
 						<div class="inputList"></div>
 					<?php } ?>
-					<?php if ($price_based == 'fixed_hourly') { ?>
+					<?php if ($price_based == 'fixed_hourly' || $price_based == 'fixed_daily') { ?>
 						<div class="inputList"></div>
 					<?php } ?>
 					<div class="inputList"></div>
@@ -834,7 +1268,7 @@ document.addEventListener('DOMContentLoaded', function() {
 		</style>
 		<?php endif; ?>
 		<span class="mptbm-map-warning" style="display:none"><?php _e('Map Authentication Failed! Please contact site admin.','ecab-taxi-booking-manager'); ?></span>
-		<div class="mptbm_map_area fdColumn" data-map="<?php echo esc_attr($map); ?>" data-show-map-result="<?php echo esc_attr($show_map_on_result); ?>" data-manual-map="<?php echo $manual_map_enabled ? 'yes' : 'no'; ?>" style="display: <?php echo (($price_based !== 'manual' || $manual_map_enabled) && $map === 'yes' && !($hide_dropoff && $price_based === 'fixed_hourly')) ? 'flex' : 'none'; ?>;">
+		<div class="mptbm_map_area fdColumn" data-map="<?php echo esc_attr($map); ?>" data-show-map-result="<?php echo esc_attr($show_map_on_result); ?>" data-manual-map="<?php echo $manual_map_enabled ? 'yes' : 'no'; ?>" style="display: <?php echo (($price_based !== 'manual' || $manual_map_enabled) && $map === 'yes' && !($hide_map_area)) ? 'flex' : 'none'; ?>;">
 			<div class="mptbm_map_area_header">
 				<h6><span class="fas fa-map-marked-alt mR_xs"></span><?php echo $price_based === 'manual' ? esc_html__('Route Locations', 'ecab-taxi-booking-manager') : mptbm_get_translation('route_map_label', __('Route Map', 'ecab-taxi-booking-manager')); ?></h6>
 				<button type="button" class="mptbm_map_collapse_toggle" aria-expanded="true" data-expand-text="<?php esc_attr_e('Show Map', 'ecab-taxi-booking-manager'); ?>" data-collapse-text="<?php esc_attr_e('Hide Map', 'ecab-taxi-booking-manager'); ?>">
@@ -972,23 +1406,32 @@ document.addEventListener('DOMContentLoaded', function() {
 		
 		// Find the time range for this specific day
 		var dayTimes = dayTimeRanges[dayName];
-		if (dayTimes && dayTimes.start.length > 0 && dayTimes.end.length > 0) {
+		// Built as a single boolean, not `dayTimes && dayTimes.start.length > 0 && ...`:
+		// some content filter running on this page's output (WordPress's own
+		// wptexturize/convert_chars, or a caching/optimizer plugin re-processing
+		// the final HTML) was turning literal "&&" into the HTML entity
+		// "&#038;&#038;" here, which is a hard JS syntax error that silently
+		// kills every other inline script on the page - Search, the route
+		// map preview, all of it. Avoiding the "&&" character sequence
+		// entirely sidesteps whatever is doing that, regardless of the cause.
+		var hasDayTimes = dayTimes ? (dayTimes.start.length > 0 ? dayTimes.end.length > 0 : false) : false;
+		if (hasDayTimes) {
 			// For each day, find the earliest start time and latest end time
 			// This ensures we get the correct range for that specific day
 			var minTime = Math.min.apply(Math, dayTimes.start);
 			var maxTime = Math.max.apply(Math, dayTimes.end);
-			
-	
-			
+
+
+
 			// Update the time picker options
 			updateTimePickerOptions(minTime, maxTime);
 		} else {
-			
+
 			// Use global range if no specific day times
 			updateTimePickerOptions(<?php echo $min_schedule_value; ?>, <?php echo $max_schedule_value; ?>);
 		}
 	}
-	
+
 	function updateTimePickerOptions(minTime, maxTime) {
 		// Convert to minutes for easier calculation
 		var minMinutes = Math.floor(minTime) * 60 + (minTime % 1) * 100;

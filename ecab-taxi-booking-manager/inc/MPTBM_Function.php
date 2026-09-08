@@ -149,6 +149,13 @@ if (!class_exists('MPTBM_Function')) {
 					return new WP_Error('mptbm_quote_hours', __('Please select a valid hourly booking duration.', 'ecab-taxi-booking-manager'));
 				}
 			}
+			if (sanitize_key($context['price_based'] ?? '') === 'fixed_daily') {
+				$days = (float) ($context['fixed_time'] ?? 0);
+				$minimum_days = max(1, (int) MP_Global_Function::get_settings('mptbm_general_settings', 'minimum_booking_days', '1'));
+				if ($days <= 0 || $days > 90 || $days < $minimum_days) {
+					return new WP_Error('mptbm_quote_days', __('Please select a valid number of booking days.', 'ecab-taxi-booking-manager'));
+				}
+			}
 			return $context;
 		}
 
@@ -490,6 +497,34 @@ if (!class_exists('MPTBM_Function')) {
 			return apply_filters('mptbm_get_date', $all_dates, $post_id);
 		}
 
+		/**
+		 * Drops any date from $dates where this vehicle has zero remaining
+		 * quantity for the whole day, based on existing bookings - used to grey
+		 * these out on the single-vehicle page calendar alongside its normal
+		 * off-days. Result is cached briefly per vehicle since it re-checks
+		 * every candidate date against the vehicle's full booking history.
+		 */
+		public static function exclude_fully_booked_dates($post_id, array $dates): array
+		{
+			if (empty($dates)) {
+				return $dates;
+			}
+			$cache_key = 'mptbm_booked_dates_' . absint($post_id);
+			$booked_dates = get_transient($cache_key);
+			if ($booked_dates === false) {
+				$force_single = get_post_meta($post_id, 'mptbm_enable_inventory', true) !== 'yes';
+				$booked_dates = [];
+				foreach ($dates as $date) {
+					$available = self::get_available_quantity($post_id, $date, '00:00', $force_single, DAY_IN_SECONDS);
+					if ($available <= 0) {
+						$booked_dates[] = $date;
+					}
+				}
+				set_transient($cache_key, $booked_dates, 5 * MINUTE_IN_SECONDS);
+			}
+			return array_values(array_diff($dates, $booked_dates));
+		}
+
 		// Labels for the "Reason" dropdown on the manual Vehicle Availability toggle.
 		// Shared by the admin editor, the admin vehicle list column, and the front-end search result.
 		public static function get_availability_reason_labels()
@@ -794,6 +829,14 @@ if (!class_exists('MPTBM_Function')) {
 				} elseif ($price_based == 'distance' && $original_price_based == 'fixed_hourly') {
 					$km_price = (float) MP_Global_Function::get_post_info($post_id, 'mptbm_km_price');
 					$price = $km_price * self::distance_in_unit($distance);
+				} elseif (($price_based == 'inclusive' || $price_based == 'fixed_daily') && $original_price_based == 'fixed_daily') {
+					// $fixed_time carries the customer-selected day count for this mode
+					// (reuses the same "fixed_time" wire format as fixed_hourly's hour count).
+					$day_price = (float) MP_Global_Function::get_post_info($post_id, 'mptbm_day_price');
+					$price = $day_price * (float) $fixed_time;
+				} elseif ($price_based == 'distance' && $original_price_based == 'fixed_daily') {
+					$km_price = (float) MP_Global_Function::get_post_info($post_id, 'mptbm_km_price');
+					$price = $km_price * self::distance_in_unit($distance);
 				} elseif (($price_based == 'inclusive' || $price_based == 'fixed_distance' || $price_based == 'fixed_map') && ($original_price_based == 'fixed_distance' || $original_price_based == 'fixed_map')) {
 					$fixed_zone_prices = MP_Global_Function::get_post_info($post_id, 'mptbm_fixed_map_route_price_info', []);
 
@@ -989,6 +1032,25 @@ if (!class_exists('MPTBM_Function')) {
 							$end_location = array_key_exists('end_location', $manual_price) ? $manual_price['end_location'] : '';
 							if ($start_place == $start_location && $destination_place == $end_location) {
 								$price = (float) ($manual_price['price'] ?? 0);
+							}
+						}
+					}
+				}
+				elseif (trim($price_based) == 'fixed_route') {
+					// A predefined named route (e.g. "Paris City Tour"): the
+					// customer just picks it by name from a dropdown, so the
+					// selected route name arrives the same way a plain start
+					// location would - matched here against this vehicle's own
+					// price for that route (mptbm_assigned_routes), with no live
+					// distance/duration calculation. The route's name/waypoints
+					// themselves live once on the global mptbm_routes CPT post.
+					$assigned_routes = MP_Global_Function::get_post_info($post_id, 'mptbm_assigned_routes', []);
+					if (sizeof($assigned_routes) > 0) {
+						foreach ($assigned_routes as $assigned_route) {
+							$route_id = array_key_exists('route_id', $assigned_route) ? absint($assigned_route['route_id']) : 0;
+							$route_name = ($route_id && get_post_status($route_id) === 'publish') ? get_the_title($route_id) : '';
+							if ($start_place !== '' && $route_name !== '' && $start_place == $route_name) {
+								$price = (float) ($assigned_route['price'] ?? 0);
 							}
 						}
 					}
@@ -1515,6 +1577,109 @@ if (!class_exists('MPTBM_Function')) {
 			return false;
 		}
 
+		/**
+		 * Optional site-wide gate: restrict online booking to a drawn service
+		 * area (e.g. a ring road) plus a short list of named exception points
+		 * (e.g. airports) that are bookable to/from the area but never to each
+		 * other. Off by default (Settings > General Settings) and a no-op for
+		 * every existing site unless an admin explicitly configures it - reuses
+		 * is_point_in_fixed_zone()/get_search_context() rather than adding any
+		 * new geometry code, and only trims the already-computed result list
+		 * (mptbm_search_result_items), so it never touches get_price(),
+		 * location_exit(), or the vehicle query itself.
+		 */
+		public static function apply_service_area_restriction($items) {
+			$enabled = MP_Global_Function::get_settings('mptbm_general_settings', 'mptbm_service_area_restriction', 'disable');
+			if ($enabled !== 'enable') {
+				return $items;
+			}
+
+			$area_ids = (array) MP_Global_Function::get_settings('mptbm_general_settings', 'mptbm_service_area_operation_area', array());
+			$area_ids = array_filter(array_map('absint', array_keys($area_ids)));
+			if (empty($area_ids)) {
+				// Not configured yet - fail open rather than blocking every search.
+				return $items;
+			}
+
+			// Read straight off this same request's POST rather than the
+			// session context: set_search_context() closes the session
+			// (session_write_close()) right after writing it, and by the time
+			// this filter runs, choose_vehicles.php has already echoed markup
+			// - so get_search_context()'s own session_start() sees
+			// headers_sent() and quietly skips, leaving the context empty.
+			// Whether that skip actually happens depends on the host's output
+			// buffering config, which is why this worked on some sites and
+			// silently failed open (no blocking at all) on others. The
+			// coordinates are already sitting in $_POST for this exact
+			// request, so there's no need to round-trip them through the
+			// session at all.
+			$start_coords = self::normalize_coordinates($_POST['start_place_coordinates'] ?? '');
+			$end_coords = self::normalize_coordinates($_POST['end_place_coordinates'] ?? '');
+			if (empty($start_coords) || empty($end_coords)) {
+				// Fallback for any caller that reaches this filter outside the
+				// normal AJAX search POST (e.g. a redirect flow re-rendering
+				// the last search from session).
+				$context = self::get_search_context();
+				$start_coords = $start_coords ?: (isset($context['start_coords']) ? $context['start_coords'] : array());
+				$end_coords = $end_coords ?: (isset($context['end_coords']) ? $context['end_coords'] : array());
+			}
+			if (empty($start_coords) || empty($end_coords)) {
+				// No verified coordinates for this search (e.g. manual/fixed_zone
+				// modes, which already have their own location_exit() gate) -
+				// nothing to evaluate, so don't block.
+				return $items;
+			}
+
+			// "In the service area" means inside ANY of the checked areas, not
+			// all of them - e.g. two separate cities served independently.
+			$start_in_area = false;
+			$end_in_area = false;
+			foreach ($area_ids as $area_id) {
+				$area_location = 'post_' . $area_id;
+				if (!$start_in_area) {
+					$start_in_area = self::is_point_in_fixed_zone($area_location, $start_coords);
+				}
+				if (!$end_in_area) {
+					$end_in_area = self::is_point_in_fixed_zone($area_location, $end_coords);
+				}
+			}
+
+			$exception_terms = (array) MP_Global_Function::get_settings('mptbm_general_settings', 'mptbm_service_area_exception_locations', array());
+			$start_is_exception = false;
+			$end_is_exception = false;
+			foreach (array_keys($exception_terms) as $term_id) {
+				$term_id = absint($term_id);
+				if (!$term_id) {
+					continue;
+				}
+				$term_location = 'term_' . $term_id;
+				if (!$start_is_exception) {
+					$start_is_exception = self::is_point_in_fixed_zone($term_location, $start_coords);
+				}
+				if (!$end_is_exception) {
+					$end_is_exception = self::is_point_in_fixed_zone($term_location, $end_coords);
+				}
+			}
+
+			$start_allowed = $start_in_area || $start_is_exception;
+			$end_allowed = $end_in_area || $end_is_exception;
+
+			// A location marked as an exception is treated as an exception
+			// unconditionally - whether or not it also happens to fall inside
+			// the drawn service area - so two exception-marked locations are
+			// always blocked from being paired together. Admins should only
+			// mark genuinely special/outside-the-area locations as exceptions;
+			// marking an ordinary inside-area location this way will block its
+			// routes to other exception locations even though both are inside.
+			$both_exceptions = $start_is_exception && $end_is_exception;
+
+			if (!$start_allowed || !$end_allowed || $both_exceptions) {
+				return array();
+			}
+
+			return $items;
+		}
+
 		public static function get_base_price_settings($post_id) {
 
             $taxi_base_location_pricing = MP_Global_Function::get_post_info( $post_id, 'mptbm_display_taxi_base_location_pricing', 'off' );
@@ -1749,6 +1914,70 @@ if (!class_exists('MPTBM_Function')) {
 				}
 			}
 			return array_unique($all_location);
+		}
+		// Route names for the "fixed_route" mode's single dropdown - the
+		// customer picks the whole named route in one field, so (unlike
+		// get_all_start_location()) there's no separate start/end list.
+		public static function get_all_routes($post_id = '')
+		{
+			$route_names = [];
+			$collect = function ($assigned_routes) use (&$route_names) {
+				foreach ($assigned_routes as $assigned_route) {
+					$route_id = absint($assigned_route['route_id'] ?? 0);
+					// Skip routes trashed/deleted after being assigned to this
+					// vehicle - a stale ID shouldn't keep showing up to customers.
+					$name = ($route_id && get_post_status($route_id) === 'publish') ? get_the_title($route_id) : '';
+					if ($name) {
+						$route_names[] = $name;
+					}
+				}
+			};
+
+			if ($post_id && $post_id > 0) {
+				$collect(MP_Global_Function::get_post_info($post_id, 'mptbm_assigned_routes', []));
+			} else {
+				$all_posts = MPTBM_Query::query_transport_list('fixed_route');
+				if ($all_posts->found_posts > 0) {
+					foreach ($all_posts->posts as $post) {
+						$collect(MP_Global_Function::get_post_info($post->ID, 'mptbm_assigned_routes', []));
+					}
+				}
+			}
+			return array_unique($route_names);
+		}
+		// route_name => comma-separated waypoints, for the browser to geocode
+		// and pin on the map as a preview once a route is picked - display
+		// only, same as the `stops` shortcode attribute; never affects price.
+		// Waypoints live once on the global mptbm_routes CPT post; this vehicle
+		// only stores which route IDs (mptbm_assigned_routes) it offers.
+		public static function get_route_waypoints_map($post_id = '')
+		{
+			$map = [];
+			$collect = function ($assigned_routes) use (&$map) {
+				foreach ($assigned_routes as $assigned_route) {
+					$route_id = absint($assigned_route['route_id'] ?? 0);
+					if (!$route_id || get_post_status($route_id) !== 'publish') {
+						continue;
+					}
+					$name = get_the_title($route_id);
+					$waypoints = get_post_meta($route_id, 'mptbm_route_waypoints', true);
+					if ($name && $waypoints) {
+						$map[$name] = $waypoints;
+					}
+				}
+			};
+
+			if ($post_id && $post_id > 0) {
+				$collect(MP_Global_Function::get_post_info($post_id, 'mptbm_assigned_routes', []));
+			} else {
+				$all_posts = MPTBM_Query::query_transport_list('fixed_route');
+				if ($all_posts->found_posts > 0) {
+					foreach ($all_posts->posts as $post) {
+						$collect(MP_Global_Function::get_post_info($post->ID, 'mptbm_assigned_routes', []));
+					}
+				}
+			}
+			return $map;
 		}
 		public static function get_end_location($start_place, $post_id = '', $price_based = 'manual')
 		{
@@ -2637,4 +2866,5 @@ if (!class_exists('MPTBM_Function')) {
 		}
 	}
 	new MPTBM_Function();
+	add_filter('mptbm_search_result_items', array('MPTBM_Function', 'apply_service_area_restriction'), 10, 1);
 }

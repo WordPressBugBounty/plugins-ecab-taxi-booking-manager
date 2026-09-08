@@ -77,6 +77,18 @@
 				$map = $display_map == 'disable' ? 'no' : $map;
 				$tab = $params['tab'] ?: 'no';
 				$tabs = $params['tabs'] ?: 'distance,hourly,manual';
+				$pickup = isset($params['pickup']) ? sanitize_text_field($params['pickup']) : '';
+				$dropoff = isset($params['dropoff']) ? sanitize_text_field($params['dropoff']) : '';
+				$pickup_zone = isset($params['pickup_zone']) ? sanitize_text_field($params['pickup_zone']) : '';
+				$dropoff_zone = isset($params['dropoff_zone']) ? sanitize_text_field($params['dropoff_zone']) : '';
+				// Display-only waypoint names for the shortcode's `stops` attribute -
+				// shown between pickup/dropoff purely as text, never geocoded or added
+				// to the routed waypoint list, so they never affect distance or price.
+				$display_stops = isset($params['stops']) ? array_filter(array_map('trim', explode(',', sanitize_text_field($params['stops'])))) : array();
+				// Pre-selects a fixed_route by name (see get_details.php) - lets a page
+				// (e.g. a landing page for one specific tour) show that route's stops
+				// plotted on load instead of making the visitor pick it themselves.
+				$route = isset($params['route']) ? sanitize_text_field($params['route']) : '';
 				ob_start();
 				do_shortcode('[shop_messages]');
 				echo ob_get_clean();
@@ -91,7 +103,7 @@
 					$map = sanitize_text_field($_POST['map']); // Changed from $display_map to $map
 					$vehicle_id = isset($_POST['vehicle_id']) ? absint($_POST['vehicle_id']) : 0;
 					// Include the correct template based on the tab
-					if ($tab_id === 'distance' || $tab_id === 'hourly' || $tab_id === 'flat-rate' || $tab_id === 'custom' || $tab_id === 'fixed_distance' || $tab_id === 'fixed_zone' || $tab_id === 'fixed_zone_dropoff') {
+					if ($tab_id === 'distance' || $tab_id === 'hourly' || $tab_id === 'flat-rate' || $tab_id === 'custom' || $tab_id === 'fixed_distance' || $tab_id === 'fixed_zone' || $tab_id === 'fixed_zone_dropoff' || $tab_id === 'fixed_route' || $tab_id === 'daily') {
 						ob_start(); // Start output buffering
 						
 						if($tab_id === 'distance'){
@@ -112,6 +124,12 @@
 							include MPTBM_Function::template_path('registration/get_details.php');
 						}else if($tab_id === 'fixed_zone_dropoff'){
 							$price_based = 'fixed_zone_dropoff';
+							include MPTBM_Function::template_path('registration/get_details.php');
+						}else if($tab_id === 'fixed_route'){
+							$price_based = 'fixed_route';
+							include MPTBM_Function::template_path('registration/get_details.php');
+						}else if($tab_id === 'daily'){
+							$price_based = 'fixed_daily';
 							include MPTBM_Function::template_path('registration/get_details.php');
 						}else if($tab_id === 'custom'){
 							do_action('mptbm_render_custom');
@@ -398,7 +416,7 @@
 						? sprintf(esc_html__('Unavailable because this time overlaps a booking or its %d-minute interval.', 'ecab-taxi-booking-manager'), $interval_minutes)
 						: esc_html__('Unavailable because this time overlaps an existing booking.', 'ecab-taxi-booking-manager');
 				} else {
-					$allowed_price_modes = array('dynamic', 'manual', 'fixed_hourly', 'fixed_zone', 'fixed_zone_dropoff', 'fixed_distance', 'fixed_map');
+					$allowed_price_modes = array('dynamic', 'manual', 'fixed_hourly', 'fixed_daily', 'fixed_zone', 'fixed_zone_dropoff', 'fixed_distance', 'fixed_map', 'fixed_route');
 					$price_based = in_array($price_based, $allowed_price_modes, true) ? $price_based : 'dynamic';
 					$unavailable_times = array_values(array_filter(array_map(function ($time) {
 						$time = str_replace(':', '.', trim((string) $time));
@@ -570,12 +588,16 @@
 						return 'manual';
 					case 'fixed_hourly':
 						return 'fixed_hourly';
+					case 'fixed_daily':
+						return 'fixed_daily';
 					case 'fixed_distance':
 					case 'fixed_map':
 						return 'fixed_map';
 					case 'fixed_zone':
 					case 'fixed_zone_dropoff':
 						return $model;
+					case 'fixed_route':
+						return 'fixed_route';
 					default:
 						return 'dynamic';
 				}
@@ -584,7 +606,7 @@
 			/** Use the locked single-page vehicle's model instead of trusting a posted mode. */
 			private function requested_search_price_mode(): string {
 				$requested = isset($_POST['price_based']) ? sanitize_key(wp_unslash($_POST['price_based'])) : 'dynamic';
-				$allowed = array('dynamic', 'manual', 'fixed_hourly', 'fixed_distance', 'fixed_zone', 'fixed_zone_dropoff', 'fixed_map');
+				$allowed = array('dynamic', 'manual', 'fixed_hourly', 'fixed_daily', 'fixed_distance', 'fixed_zone', 'fixed_zone_dropoff', 'fixed_map', 'fixed_route');
 				$requested = in_array($requested, $allowed, true) ? $requested : 'dynamic';
 				$vehicle_id = isset($_POST['mptbm_source_vehicle_id']) ? absint($_POST['mptbm_source_vehicle_id']) : 0;
 

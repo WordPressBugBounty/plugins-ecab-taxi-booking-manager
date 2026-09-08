@@ -247,7 +247,7 @@ div.mptbm_transport_search_area .tabItemNext.active .circleTitle {
 	display: flex;
 	cursor: pointer;
 	background: #eef0f5;
-	max-width: 420px;
+	max-width: 620px;
 	margin: 0 0 16px 0 !important;
 	border-radius: 999px;
 	gap: 2px;
@@ -1007,6 +1007,10 @@ div.mptbm_booking_item h4 {
 
 .mptbm_booking_item_hidden {
 	display: none !important;
+}
+
+#mptbm_route_select{
+    padding-left: 35px !important;
 }
 
 div.mptbm_transport_search_area ul.list_inline_two {
