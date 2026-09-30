@@ -284,6 +284,18 @@ if ($days_to_hide > 0 && !empty($all_dates)) {
     $buffer_end_minutes = $buffer_end_minutes % 1440;
 }
 
+// The check above only asks whether the buffer ran past midnight, so an evening
+// visitor still got today as the first calendar date once its last bookable slot
+// had gone. The picker then preselected that date and mptbm_registration.js
+// filtered every option out of the time list against this same figure, leaving a
+// preselected date whose time dropdown opens empty. Today is equally unbookable
+// once its closing time has passed, so move to the next date, which starts with
+// its whole day ahead of it.
+if (!empty($all_dates) && $buffer_end_minutes >= $max_minutes) {
+    array_shift($all_dates);
+    $buffer_end_minutes = 0;
+}
+
 if (sizeof($all_dates) > 0) {
 	$taxi_return = MPTBM_Function::get_general_settings('taxi_return', 'enable');
 	$interval_time = MPTBM_Function::get_general_settings('mptbm_pickup_interval_time', '30');
@@ -549,6 +561,26 @@ if (sizeof($all_dates) > 0) {
 						<?php } ?>
 						<i class="fas fa-map-marker-alt mptbm_left_icon allCenter"></i>
 					</label>
+					<?php
+						// "Use my location" only makes sense for the free-text map input:
+						// 'manual'/'fixed_zone'/'fixed_route' render a <select> of admin-defined
+						// zones/routes instead, where a geocoded street address is not a valid
+						// option. Rendered even on non-HTTPS pages -- the browser is the only
+						// thing that can tell whether geolocation is actually usable, so
+						// mptbm_registration.js hides it at runtime when it is not.
+						$pickup_is_map_input = !in_array($price_based, array('manual', 'fixed_zone', 'fixed_route'), true);
+						$use_my_location = MP_Global_Function::get_settings('mptbm_general_settings', 'mptbm_enable_use_my_location', 'yes');
+						// 'disable' ("Without map api") has no geocoder at all, so detected
+						// coordinates could never be turned into an address to fill in.
+						if ($pickup_is_map_input && $use_my_location === 'yes' && $map_type !== 'disable') {
+					?>
+						<div class="mptbm_use_my_location_wrap">
+							<button type="button" class="mptbm_use_my_location">
+								<i class="fas fa-location-arrow" aria-hidden="true"></i>
+								<span class="mptbm_use_my_location_text"><?php echo mptbm_get_translation('use_my_location_label', __('Use my location', 'ecab-taxi-booking-manager')); ?></span>
+							</button>
+						</div>
+					<?php } ?>
 				</div>
 				<?php
 					$extra_stop = MP_Global_Function::get_settings('mptbm_general_settings', 'mptbm_extra_stop_between_pickup_dropoff', 'no');
@@ -1424,20 +1456,49 @@ document.addEventListener('DOMContentLoaded', function () {
 
 
 			// Update the time picker options
-			updateTimePickerOptions(minTime, maxTime);
+			updateTimePickerOptions(minTime, maxTime, selectedDate);
 		} else {
 
 			// Use global range if no specific day times
-			updateTimePickerOptions(<?php echo $min_schedule_value; ?>, <?php echo $max_schedule_value; ?>);
+			updateTimePickerOptions(<?php echo $min_schedule_value; ?>, <?php echo $max_schedule_value; ?>, selectedDate);
 		}
 	}
 
-	function updateTimePickerOptions(minTime, maxTime) {
+	function updateTimePickerOptions(minTime, maxTime, selectedDate) {
 		// Convert to minutes for easier calculation
 		var minMinutes = Math.floor(minTime) * 60 + (minTime % 1) * 100;
 		var maxMinutes = Math.floor(maxTime) * 60 + (maxTime % 1) * 100;
 		var intervalTime = <?php echo $interval_time; ?>;
-		
+
+		// Raise the floor for "today" (or the buffer-shifted first bookable date),
+		// using a freshly computed current time every call - never a value baked in
+		// once at page load, which is only accurate for the instant the page
+		// rendered. This rebuild runs on every date click (see the .flatpickr-day
+		// handler below) and used to always win over mptbm_registration.js's own
+		// buffer-aware rebuild (that one fires first but this one, 100ms later,
+		// overwrote it with the full unfiltered range) - already-passed times for
+		// today were reappearing the moment the customer clicked any date and came
+		// back. Folding the same buffer check in here, computed fresh each time,
+		// fixes it regardless of which rebuild happens to run last.
+		if (selectedDate) {
+			var bufferMinutesTotal = <?php echo (int) $buffer_time; ?>;
+			var now = new Date();
+			var todayIso = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0') + '-' + String(now.getDate()).padStart(2, '0');
+			var firstCalendarDate = jQuery('[name="mptbm_first_calendar_date"]').val();
+
+			if (selectedDate === todayIso) {
+				var nowMinutes = now.getHours() * 60 + now.getMinutes() + bufferMinutesTotal;
+				if (nowMinutes > minMinutes) minMinutes = nowMinutes;
+			} else if (bufferMinutesTotal > 1440 && firstCalendarDate && selectedDate === firstCalendarDate) {
+				// Buffer spills past midnight: today was dropped from the calendar
+				// entirely (see the $days_to_hide PHP logic above) and this is the new
+				// first bookable day - only the buffer's remainder (after the full
+				// day(s) it already consumed) still applies to it.
+				var spilloverMinutes = bufferMinutesTotal % 1440;
+				if (spilloverMinutes > minMinutes) minMinutes = spilloverMinutes;
+			}
+		}
+
 		// Clear existing options
 		jQuery('.start_time_list li').remove();
 		jQuery('.return_time_list li').remove();

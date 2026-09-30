@@ -395,8 +395,18 @@ function wptbm_get_schedule($post_id, $days_name, $selected_day,$start_time_sche
         if (is_array($operation_area_ids)) {
             $is_in_any_area = false;
             $transport_operation_type = get_post_meta($post_id, 'mptbm_operation_area_type', true);
+            // Inclusive vehicles resolve to $price_based === 'dynamic' for search matching
+            // (see MPTBM_Transport_Search::vehicle_search_price_mode()), so without this
+            // flag they'd fall through to the generic "both pickup and dropoff must be in
+            // area" branch below - even when the admin picked "Pickup In" - and that branch
+            // relies on a client-side geolib check that's broken (coordinates get
+            // wp_json_encode()'d as an already-JSON string, so it always evaluates false).
+            // Scoped to Inclusive only: distance/duration/distance_duration keep their
+            // existing (unfixed) behavior untouched.
+            $vehicle_price_based_meta = get_post_meta($post_id, 'mptbm_price_based', true);
+            $is_inclusive_dynamic = ($price_based === 'dynamic' && $vehicle_price_based_meta === 'inclusive');
             foreach ($operation_area_ids as $operation_area_id) {
-                if ($transport_operation_type === 'fixed-map-operation-area-type' && $price_based === 'fixed_map') {
+                if ($transport_operation_type === 'fixed-map-operation-area-type' && ($price_based === 'fixed_map' || $is_inclusive_dynamic)) {
                     // Get coordinates for this area dynamically
                     $area_type = get_post_meta($operation_area_id, 'mptbm-operation-type', true);
                     $coord_key = 'mptbm-coordinates-three';
@@ -414,8 +424,8 @@ function wptbm_get_schedule($post_id, $days_name, $selected_day,$start_time_sche
                             $operation_area_coordinates[] = ["latitude" => $flat_operation_area_coordinates[$i], "longitude" => $flat_operation_area_coordinates[$i + 1]];
                         }
 
-                        $start_coords = is_array($start_place_coordinates) ? $start_place_coordinates : json_decode($start_place_coordinates, true);
-                        $end_coords = is_array($end_place_coordinates) ? $end_place_coordinates : json_decode($end_place_coordinates, true);
+                        $start_coords = is_array($start_place_coordinates) ? $start_place_coordinates : (json_decode($start_place_coordinates, true) ?: json_decode(stripslashes($start_place_coordinates), true));
+                        $end_coords = is_array($end_place_coordinates) ? $end_place_coordinates : (json_decode($end_place_coordinates, true) ?: json_decode(stripslashes($end_place_coordinates), true));
 
                         $start_in_area = false;
                         $end_in_area = false;
@@ -425,6 +435,11 @@ function wptbm_get_schedule($post_id, $days_name, $selected_day,$start_time_sche
                         if ($start_in_area) {
                             $is_in_any_area = true;
                             $_SESSION["mptbm_fixed_distance_match_" . $post_id] = $end_in_area ? 'full' : 'partial';
+                            if ($is_inclusive_dynamic) {
+                                // Lets get_price()'s Inclusive branch look up this area's
+                                // per_km/per_hour override instead of the vehicle's flat rate.
+                                $_SESSION["mptbm_operation_area_match_" . $post_id] = $operation_area_id;
+                            }
                             ?>
                             <script>
                                 var selectorClass = `.mptbm_booking_item_<?php echo $post_id; ?>`;
@@ -498,6 +513,32 @@ function wptbm_get_schedule($post_id, $days_name, $selected_day,$start_time_sche
                         for ($i = 0; $i < count($flat_operation_area_coordinates); $i += 2) {
                             $operation_area_coordinates[] = ["latitude" => $flat_operation_area_coordinates[$i], "longitude" => $flat_operation_area_coordinates[$i + 1]];
                         }
+                        if ($is_inclusive_dynamic) {
+                            // Reliable PHP-side "Both In" check for Inclusive vehicles only -
+                            // the JS geolib fallback below (used by distance/duration/
+                            // distance_duration) is left exactly as-is.
+                            // Coordinates normally arrive as a real PHP array here (jQuery
+                            // serializes the JS {latitude,longitude} object with bracket
+                            // notation), but fall back to decoding a JSON-string form too -
+                            // trying it raw first, then stripslashes()'d, since WordPress's
+                            // wp_magic_quotes() slashes $_POST and a plain json_decode() of
+                            // that slashed string silently returns null.
+                            $inclusive_start_coords = is_array($start_place_coordinates) ? $start_place_coordinates : (json_decode($start_place_coordinates, true) ?: json_decode(stripslashes($start_place_coordinates), true));
+                            $inclusive_end_coords = is_array($end_place_coordinates) ? $end_place_coordinates : (json_decode($end_place_coordinates, true) ?: json_decode(stripslashes($end_place_coordinates), true));
+                            $inclusive_start_in = is_array($inclusive_start_coords) ? pointInPolygon($inclusive_start_coords, $operation_area_coordinates) : false;
+                            $inclusive_end_in = is_array($inclusive_end_coords) ? pointInPolygon($inclusive_end_coords, $operation_area_coordinates) : false;
+                            if ($inclusive_start_in && $inclusive_end_in) {
+                                $is_in_any_area = true;
+                                $_SESSION["mptbm_operation_area_match_" . $post_id] = $operation_area_id;
+                                ?>
+                                <script>
+                                    var selectorClass = `.mptbm_booking_item_<?php echo $post_id; ?>`;
+                                    jQuery(selectorClass).removeClass('mptbm_booking_item_hidden');
+                                    document.cookie = selectorClass + '=' + selectorClass + ";path=/";
+                                </script>
+                                <?php
+                            }
+                        } else {
                         ?>
                         <script>
                             var operation_area_coordinates = <?php echo wp_json_encode($operation_area_coordinates); ?>;
@@ -512,6 +553,7 @@ function wptbm_get_schedule($post_id, $days_name, $selected_day,$start_time_sche
                                 document.cookie = selectorClass + '=' + selectorClass + ";path=/";
                                 <?php $is_in_any_area = true; ?>
                             }
+                            <?php } ?>
                         </script>
                         <?php
                     }
@@ -1140,6 +1182,7 @@ $mptbm_priced_duration_text = !empty($mptbm_search_context['distance_verified'])
 						<h3 class="mptbm_results_summary_title">
 							<strong class="mptbm_results_count_number">0</strong> <?php esc_html_e('available', 'ecab-taxi-booking-manager'); ?>
 						</h3>
+						<?php if (MP_Global_Function::get_settings('mptbm_general_settings', 'hide_sort_view_controls', 'no') !== 'yes') { ?>
 						<div class="mptbm_results_controls_right">
 							<div class="mptbm_results_view_toggle" role="group" aria-label="<?php esc_attr_e('Layout view', 'ecab-taxi-booking-manager'); ?>">
 								<button type="button" class="is-active" data-view="list" aria-label="<?php esc_attr_e('List view', 'ecab-taxi-booking-manager'); ?>">
@@ -1159,6 +1202,7 @@ $mptbm_priced_duration_text = !empty($mptbm_search_context['distance_verified'])
 								</select>
 							</label>
 						</div>
+						<?php } ?>
 					</div>
 					<?php
 
@@ -1300,7 +1344,12 @@ if ($all_posts->found_posts > 0) {
                     }
                 }
 
-                $d_km = $total_b_dist / 1000;
+                // Threshold and price_km are quoted in the site's distance unit, so the
+                // travelled distance must be measured in it too - dividing by 1000 here
+                // charged the per-mile rate for every kilometre on a Mile site, making
+                // this listing 1.609x the price MPTBM_Function::calculate_base_location_price()
+                // recomputes at add-to-cart. Keep the two in step.
+                $d_km = MPTBM_Function::distance_in_unit($total_b_dist);
                 $d_hr = $total_b_dur / 3600;
 
                 if ($d_km >= $bp_settings['threshold']) {

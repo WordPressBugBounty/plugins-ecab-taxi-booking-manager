@@ -474,7 +474,7 @@ if (!class_exists('MPTBM_Function')) {
 					$start_date = $now;
 				}
 				$repeated_after = MP_Global_Function::get_post_info($post_id, 'mptbm_repeated_after', 1);
-				$active_days = MP_Global_Function::get_post_info($post_id, 'mptbm_active_days', 10) - 1;
+				$active_days = MP_Global_Function::get_post_info($post_id, 'mptbm_active_days', 60) - 1;
 				$end_date = date('Y-m-d', strtotime($start_date . ' +' . $active_days . ' day'));
 				$dates = MP_Global_Function::date_separate_period($start_date, $end_date, $repeated_after);
 				foreach ($dates as $date) {
@@ -507,6 +507,18 @@ if (!class_exists('MPTBM_Function')) {
 		public static function exclude_fully_booked_dates($post_id, array $dates): array
 		{
 			if (empty($dates)) {
+				return $dates;
+			}
+			// A whole calendar day only makes sense to grey out as "booked" for
+			// day-rental vehicles (fixed_daily), where one booking genuinely occupies
+			// the entire day. For point-to-point modes (distance/hourly/manual/etc.)
+			// a single short trip earlier that day would otherwise flag the whole
+			// date as unavailable even though the vehicle is free the rest of it -
+			// that time-of-day granularity is already handled separately by
+			// get_unavailable_time_slots() once a date is picked. It would also
+			// collapse the calendar's minDate/maxDate range down to almost nothing
+			// (see MP_Global_Function::date_picker_js()), breaking month navigation.
+			if (MP_Global_Function::get_post_info($post_id, 'mptbm_price_based') !== 'fixed_daily') {
 				return $dates;
 			}
 			$cache_key = 'mptbm_booked_dates_' . absint($post_id);
@@ -812,6 +824,30 @@ if (!class_exists('MPTBM_Function')) {
 				if ($price_based == 'inclusive' && $original_price_based == 'dynamic') {
 					$hour_price = (float) MP_Global_Function::get_post_info($post_id, 'mptbm_hour_price');
 					$km_price = (float) MP_Global_Function::get_post_info($post_id, 'mptbm_km_price');
+
+					// Operation Area per-area rate override, scoped to Inclusive only.
+					// choose_vehicles.php's wptbm_get_schedule() sets this session key once
+					// it PHP-side-matches an Operation Area for an Inclusive vehicle - mirrors
+					// the fixed_map/fixed_distance override further below, but limited to
+					// per_hour/per_km (Inclusive has no single "flat" figure to override).
+					$inclusive_area_match_id = isset($_SESSION['mptbm_operation_area_match_' . $post_id]) ? $_SESSION['mptbm_operation_area_match_' . $post_id] : '';
+					if ($inclusive_area_match_id) {
+						// get_post_meta()'s 3rd param is $single (bool) - array() is falsy,
+						// which would silently ask for the "all values" form (wrapping the
+						// unserialized array in another array) instead of the value itself.
+						$inclusive_area_pricing = get_post_meta($post_id, 'mptbm_operation_area_pricing', true);
+						$inclusive_area_post_id = 'post_' . $inclusive_area_match_id;
+						$inclusive_area_price_data = (is_array($inclusive_area_pricing) && !empty($inclusive_area_pricing[0][$inclusive_area_post_id])) ? $inclusive_area_pricing[0][$inclusive_area_post_id] : array();
+						if (is_array($inclusive_area_price_data)) {
+							if (isset($inclusive_area_price_data['per_hour']) && $inclusive_area_price_data['per_hour'] > 0) {
+								$hour_price = (float) $inclusive_area_price_data['per_hour'];
+							}
+							if (isset($inclusive_area_price_data['per_km']) && $inclusive_area_price_data['per_km'] > 0) {
+								$km_price = (float) $inclusive_area_price_data['per_km'];
+							}
+						}
+					}
+
 					$price = $hour_price * ((float) $duration / 3600) + $km_price * self::distance_in_unit($distance);
 				} elseif ($price_based == 'distance' && $original_price_based == 'dynamic') {
 					$km_price = (float) MP_Global_Function::get_post_info($post_id, 'mptbm_km_price');
