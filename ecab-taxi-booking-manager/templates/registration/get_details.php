@@ -300,6 +300,7 @@ if (sizeof($all_dates) > 0) {
 	$taxi_return = MPTBM_Function::get_general_settings('taxi_return', 'enable');
 	$interval_time = MPTBM_Function::get_general_settings('mptbm_pickup_interval_time', '30');
 	$interval_hours = $interval_time / 60;
+	$time_picker_grid = MPTBM_Function::get_general_settings('mptbm_time_picker_grid_style', 'no');
 	$waiting_time_check = MPTBM_Function::get_general_settings('taxi_waiting_time', 'enable');
 
 	// Check if Pro plugin is active
@@ -342,7 +343,7 @@ if (sizeof($all_dates) > 0) {
 ?>
 	<div class="<?php echo esc_attr($area_class); ?> ">
 	
-		<div class="_dLayout mptbm_search_area <?php echo esc_attr($form_style_class); ?> <?php echo esc_attr(($price_based == 'manual') ? 'mAuto' : ''); ?>">
+		<div class="_dLayout mptbm_search_area <?php echo esc_attr($form_style_class); ?> <?php echo esc_attr(($price_based == 'manual') ? 'mAuto' : ''); ?> <?php echo esc_attr($time_picker_grid === 'yes' ? 'mptbm-time-grid' : ''); ?>">
 			<div class="mptbm_search_area_header">
 				<span class="fas fa-search mptbm_search_area_header_icon"></span>
 				<h3><?php echo mptbm_get_translation('route_planning_label', __('Route Planning', 'ecab-taxi-booking-manager')); ?></h3>
@@ -376,11 +377,11 @@ if (sizeof($all_dates) > 0) {
 					<input type="hidden" id="mptbm_map_start_time" value="" />
 					<label class="fdColumn">
 						<span><?php echo mptbm_get_translation('pickup_time_label', __('Pickup Time', 'ecab-taxi-booking-manager')); ?></span>
-						<input type="text" id="mptbm_start_time" class="formControl" placeholder="<?php echo mptbm_get_translation('please_select_time_label', __('Please Select Time', 'ecab-taxi-booking-manager')); ?>" value="" readonly />
+						<input type="text" <?php echo ! empty($vehicle_id) ? 'data-mptbm-schedule-time="true"' : 'readonly'; ?> id="mptbm_start_time" class="formControl start_time_input" step="60" disabled data-invalid-time="<?php esc_attr_e('Choose an available pickup time within the operating hours and configured time interval.', 'ecab-taxi-booking-manager'); ?>" placeholder="<?php echo mptbm_get_translation('please_select_time_label', __('Please Select Time', 'ecab-taxi-booking-manager')); ?>" value="" />
 						<span class="far fa-clock mptbm_left_icon allCenter"></span>
 					</label>
 
-					<ul class="mp_input_select_list start_time_list">
+					<ul class="mp_input_select_list start_time_list" <?php echo ! empty($vehicle_id) ? 'aria-hidden="true" style="display:none !important"' : 'style="display:none"'; ?>>
 						<?php
 						for ($i = $min_minutes; $i <= $max_minutes; $i += $interval_time) {
 
@@ -1429,10 +1430,11 @@ document.addEventListener('DOMContentLoaded', function () {
 	function updateTimeRangeForDay(selectedDate) {
 		if (!selectedDate) return;
 		
-		// Get the day name from the selected date
+		// ISO date-only strings are parsed at midnight UTC. Read the weekday in
+		// UTC too, so customers west of UTC do not get the previous day's hours.
 		var date = new Date(selectedDate);
 		var dayNames = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
-		var dayName = dayNames[date.getDay()];
+		var dayName = dayNames[date.getUTCDay()];
 		
 		
 		
@@ -1459,15 +1461,15 @@ document.addEventListener('DOMContentLoaded', function () {
 			updateTimePickerOptions(minTime, maxTime, selectedDate);
 		} else {
 
-			// Use global range if no specific day times
-			updateTimePickerOptions(<?php echo $min_schedule_value; ?>, <?php echo $max_schedule_value; ?>, selectedDate);
+			// No saved hours for this weekday: do not offer another day's range.
+			updateTimePickerOptions(1, 0, selectedDate);
 		}
 	}
 
 	function updateTimePickerOptions(minTime, maxTime, selectedDate) {
 		// Convert to minutes for easier calculation
-		var minMinutes = Math.floor(minTime) * 60 + (minTime % 1) * 100;
-		var maxMinutes = Math.floor(maxTime) * 60 + (maxTime % 1) * 100;
+		var minMinutes = Math.round(Math.floor(minTime) * 60 + (minTime % 1) * 100);
+		var maxMinutes = Math.round(Math.floor(maxTime) * 60 + (maxTime % 1) * 100);
 		var intervalTime = <?php echo $interval_time; ?>;
 
 		// Raise the floor for "today" (or the buffer-shifted first bookable date),
@@ -1528,30 +1530,56 @@ document.addEventListener('DOMContentLoaded', function () {
 	jQuery(document).ready(function() {
 		// Initialize with global range on page load
 		updateTimePickerOptions(<?php echo $min_schedule_value; ?>, <?php echo $max_schedule_value; ?>);
-		
+
+		// Flatpickr fires "change" on its input, and a "click" on each day cell,
+		// every time a day is clicked in the UI - including re-clicking whichever
+		// date is already selected (e.g. re-opening the calendar and clicking
+		// today again). All three handlers below used to call
+		// updateTimeRangeForDay() unconditionally on every such event, which
+		// clears and rebuilds the time list - wiping a pickup/return time the
+		// customer had already chosen for no reason, since the date itself never
+		// moved. Tracking the last date actually acted on and skipping repeats
+		// fixes that without touching what happens on a genuine date change.
+		// Seeded from the server-known first bookable date, not the hidden
+		// #mptbm_map_start_date field's value - that field starts out empty in
+		// the markup and is only populated by flatpickr asynchronously, so
+		// reading it here (synchronously, before flatpickr has necessarily run)
+		// could seed an empty baseline and let the very next click - even one
+		// that doesn't actually change the date - look like a real change.
+		var mptbmLastStartRangeDate = jQuery('#mptbm_first_calendar_date').val();
+		var mptbmLastReturnRangeDate = jQuery('#mptbm_map_return_date').val();
+
 		jQuery('#mptbm_start_date').on('change', function() {
 			var fp = this._flatpickr;
 			if (fp && fp.selectedDates.length > 0) {
 				var d = fp.selectedDates[0];
 				var isoDate = d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2);
-				updateTimeRangeForDay(isoDate);
+				if (isoDate !== mptbmLastStartRangeDate) {
+					mptbmLastStartRangeDate = isoDate;
+					updateTimeRangeForDay(isoDate);
+				}
 			}
 		});
-		
+
 		jQuery('#mptbm_return_date').on('change', function() {
 			var fp = this._flatpickr;
 			if (fp && fp.selectedDates.length > 0) {
 				var d = fp.selectedDates[0];
 				var isoDate = d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2);
-				updateTimeRangeForDay(isoDate);
+				if (isoDate !== mptbmLastReturnRangeDate) {
+					mptbmLastReturnRangeDate = isoDate;
+					updateTimeRangeForDay(isoDate);
+				}
 			}
 		});
-		
-		// Also trigger on flatpickr date selection
+
+		// Also trigger on flatpickr date selection (belt-and-braces alongside the
+		// "change" handler above - see its comment for why the guard is needed).
 		jQuery(document).on('click', '.flatpickr-day:not(.prevMonthDay):not(.nextMonthDay):not(.flatpickr-disabled)', function() {
 			setTimeout(function() {
 				var selectedDate = jQuery('#mptbm_map_start_date').val();
-				if (selectedDate) {
+				if (selectedDate && selectedDate !== mptbmLastStartRangeDate) {
+					mptbmLastStartRangeDate = selectedDate;
 					updateTimeRangeForDay(selectedDate);
 				}
 			}, 100);

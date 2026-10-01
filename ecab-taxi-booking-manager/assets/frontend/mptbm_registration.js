@@ -428,6 +428,9 @@ function mptbm_set_cookie_distance_duration(start_place, end_place) {
             center: mp_lat_lng,
             zoom: 15,
         });
+        mptbm_auto_detect_recenter(function (lat, lng) {
+            mptbm_map.setCenter({ lat: lat, lng: lng });
+        });
     }
 
     // Check if we have enough locations to calculate a route
@@ -637,6 +640,9 @@ function mptbm_set_cookie_distance_duration(start_place, end_place) {
             mptbm_map = new google.maps.Map(mapContainer, {
                 center: mp_lat_lng,
                 zoom: 15,
+            });
+            mptbm_auto_detect_recenter(function (lat, lng) {
+                mptbm_map.setCenter({ lat: lat, lng: lng });
             });
         }
 
@@ -889,6 +895,9 @@ function mptbm_render_manual_google_locations() {
 
     if (!mptbm_map || (typeof mptbm_map.getDiv === 'function' && mptbm_map.getDiv() !== mapContainer)) {
         mptbm_map = new google.maps.Map(mapContainer, { center: mp_lat_lng, zoom: 7, mapTypeControl: false });
+        mptbm_auto_detect_recenter(function (lat, lng) {
+            mptbm_map.setCenter({ lat: lat, lng: lng });
+        });
     }
     mptbm_manual_google_markers.forEach(function (marker) { marker.setMap(null); });
     mptbm_manual_google_markers = [];
@@ -1117,6 +1126,30 @@ function mptbm_ensure_osm_map_ready() {
     return mptbm_init_osm_map();
 }
 
+// When "Auto-detect Visitor's Location" is enabled in Map API Settings, asks
+// the browser for the visitor's own position and hands its coordinates to
+// `recenter` so the just-created map can move off the admin-configured
+// default. Silently does nothing (leaving the default in place) if the
+// setting is off, the page isn't HTTPS, or the visitor denies/ignores the
+// permission prompt -- this must never block map init on a response.
+function mptbm_auto_detect_recenter(recenter) {
+    if (typeof mptbm_auto_detect_location === 'undefined' || mptbm_auto_detect_location !== 'enable') {
+        return;
+    }
+    if (!navigator.geolocation || !window.isSecureContext) {
+        return;
+    }
+    navigator.geolocation.getCurrentPosition(
+        function (position) {
+            recenter(position.coords.latitude, position.coords.longitude);
+        },
+        function () {
+            // Denied, unavailable, or timed out -- keep the admin default.
+        },
+        { timeout: 10000 }
+    );
+}
+
 function mptbm_init_osm_map() {
 
     if (typeof L === 'undefined') {
@@ -1154,6 +1187,12 @@ function mptbm_init_osm_map() {
     // duplicated across tabs -- Leaflet would otherwise resolve it via its
     // own getElementById and land on the wrong tab's div.
     mptbm_osm_map = L.map(mapContainer).setView([defaultLat, defaultLng], 10);
+
+    mptbm_auto_detect_recenter(function (lat, lng) {
+        if (mptbm_osm_map) {
+            mptbm_osm_map.setView([lat, lng], 10);
+        }
+    });
 
     // Add OpenStreetMap tiles
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -2460,7 +2499,83 @@ function mptbm_init_google_map() {
         return String(hours).padStart(2, '0') + '.' + String(minutes).padStart(2, '0');
     }
 
+    function mptbmSyncNativePickupTime(parent) {
+        var input = parent.find('#mptbm_start_time[data-mptbm-schedule-time]')[0];
+        if (!input) {
+            // Global search uses the scrollable slot list rather than the time spinner.
+            parent.find('#mptbm_start_time').prop('disabled',
+                !parent.find('#mptbm_map_start_date').val() || !parent.find('.start_time_list li[data-time]').length);
+            return;
+        }
+
+        var slots = parent.find('.start_time_list li[data-time]').filter(function () {
+            return !!mptbmNormalizeTimeToken($(this).attr('data-time'));
+        });
+        input.disabled = !parent.find('#mptbm_map_start_date').val() || !slots.length;
+        input.removeAttribute('min');
+        input.removeAttribute('max');
+        input.step = '60';
+        if (slots.length) {
+            input.min = slots.first().attr('data-time').replace('.', ':');
+            input.max = slots.last().attr('data-time').replace('.', ':');
+            if (slots.length > 1) {
+                var minutes = function (item) {
+                    var parts = item.attr('data-time').split('.');
+                    return Number(parts[0]) * 60 + Number(parts[1]);
+                };
+                input.step = String((minutes(slots.eq(1)) - minutes(slots.first())) * 60);
+            }
+        }
+
+        var enteredTime = input.value;
+        // Native browser time controls may expose all hours even with min/max.
+        // Use the already-loaded Flatpickr time editor on desktop and mobile.
+        if (!input._flatpickr && typeof flatpickr === 'function') {
+            flatpickr(input, {
+                enableTime: true,
+                noCalendar: true,
+                dateFormat: 'H:i',
+                time_24hr: true,
+                disableMobile: true,
+                allowInput: true,
+                onClose: function () { $(input).trigger('change'); }
+            });
+        }
+        if (input._flatpickr) {
+            input._flatpickr.set({
+                minTime: slots.length ? input.min : '00:00',
+                maxTime: slots.length ? input.max : '23:59',
+                defaultHour: slots.length ? Number(input.min.split(':')[0]) : 0,
+                defaultMinute: slots.length ? Number(input.min.split(':')[1]) : 0,
+                minuteIncrement: Math.max(1, Math.min(60, Number(input.step) / 60))
+            });
+            // set() refreshes the field from Flatpickr's previous selection.
+            // Keep the customer's current entry for slot validation below.
+            input.value = enteredTime;
+            if (input.disabled && input._flatpickr.isOpen) input._flatpickr.close();
+        }
+
+        var selected = slots.filter(function () {
+            return mptbmNormalizeTimeToken($(this).attr('data-time')) === mptbmNormalizeTimeToken(input.value);
+        }).first();
+        var valid = !input.disabled && selected.length && selected.attr('aria-disabled') !== 'true';
+        input.setCustomValidity(input.value && !valid ? input.getAttribute('data-invalid-time') : '');
+        parent.find('#mptbm_map_start_time').val(valid ? selected.attr('data-value') : '');
+    }
+
+    $(document).on('change', '#mptbm_start_time[data-mptbm-schedule-time]', function () {
+        var parent = $(this).closest('.mptbm_transport_search_area');
+        mptbmSyncNativePickupTime(parent);
+        if (!this.checkValidity()) {
+            mptbm_content_refresh(parent);
+            this.reportValidity();
+            return;
+        }
+        parent.find('#mptbm_map_start_time').trigger('change');
+    });
+
     function mptbmRefreshVehicleTimeAvailability(parent) {
+        mptbmSyncNativePickupTime(parent);
         var vehicleId = parseInt(parent.find('[name="mptbm_source_vehicle_id"]').val(), 10) || 0;
         var selectedDate = parent.find('#mptbm_map_start_date').val();
         var timeItems = parent.find('.start_time_list li[data-time]');
@@ -2531,7 +2646,11 @@ function mptbm_init_google_map() {
                     });
 
                     if (selectedTimeWasDisabled) {
-                        parent.find('#mptbm_map_start_time, #mptbm_start_time').val('');
+                        parent.find('#mptbm_map_start_time, #mptbm_start_time:not([data-mptbm-schedule-time])').val('');
+                    }
+                    mptbmSyncNativePickupTime(parent);
+                    if (selectedTimeWasDisabled) {
+                        mptbm_content_refresh(parent);
                     }
                 }
             });
@@ -2557,6 +2676,14 @@ function mptbm_init_google_map() {
     $(document).on("click", "#mptbm_get_vehicle", function () {
         let searchButton = this;
         let parent = $(this).closest(".mptbm_transport_search_area");
+        var nativeTime = parent.find('#mptbm_start_time[data-mptbm-schedule-time]')[0];
+        if (nativeTime) {
+            mptbmSyncNativePickupTime(parent);
+            if (!nativeTime.checkValidity()) {
+                nativeTime.reportValidity();
+                return;
+            }
+        }
         let mptbm_enable_return_in_different_date = parent
             .find('[name="mptbm_enable_return_in_different_date"]')
             .val();
@@ -3332,6 +3459,20 @@ function mptbm_init_google_map() {
         }
     });
     $(document).on("change", "#mptbm_map_start_date", function (e, meta) {
+        // Flatpickr fires "change" on every day click, including re-clicking
+        // whichever date is already selected (see the .flatpickr-day handler
+        // below, which re-dispatches this same event on every click regardless
+        // of whether the value actually moved) - this unconditionally wiped
+        // whatever pickup time the customer had already chosen, even though
+        // nothing about the date changed. Skip the rebuild entirely when the
+        // value is identical to what this field already had, so an already
+        // -valid time selection survives re-opening the calendar.
+        var selectedDateForGuard = $(this).val();
+        if ($(this).data('mptbmPrevStartDate') === selectedDateForGuard) {
+            return;
+        }
+        $(this).data('mptbmPrevStartDate', selectedDateForGuard);
+
         let parent = $(this).closest(".mptbm_transport_search_area");
         // Clear the time slots list
         parent.find('#mptbm_map_start_time').siblings('.start_time_list').empty();
@@ -3405,6 +3546,11 @@ function mptbm_init_google_map() {
             });
         }
 
+        // Replace the legacy full-week copy with the selected weekday immediately.
+        if (typeof updateTimeRangeForDay === 'function') {
+            updateTimeRangeForDay(selectedDate);
+        }
+
         // Update the return date picker if needed
         if (mptbm_enable_return_in_different_date == 'yes') {
             var fpReturn = $('#mptbm_return_date')[0];
@@ -3432,6 +3578,14 @@ function mptbm_init_google_map() {
 
 
     $(document).on("change", "#mptbm_map_return_date", function () {
+        // Same re-click-fires-change guard as #mptbm_map_start_date above - skip
+        // wiping an already-chosen return time when the date didn't actually move.
+        var selectedReturnDateForGuard = $(this).val();
+        if ($(this).data('mptbmPrevReturnDate') === selectedReturnDateForGuard) {
+            return;
+        }
+        $(this).data('mptbmPrevReturnDate', selectedReturnDateForGuard);
+
         let mptbm_enable_return_in_different_date = $('[name="mptbm_enable_return_in_different_date"]').val();
 
         if (mptbm_enable_return_in_different_date == 'yes') {
