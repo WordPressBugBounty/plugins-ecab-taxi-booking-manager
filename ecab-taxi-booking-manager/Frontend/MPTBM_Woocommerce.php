@@ -168,16 +168,16 @@ if (!class_exists('MPTBM_Woocommerce')) {
 			$linked_id = MP_Global_Function::get_post_info($product_id, 'link_mptbm_id', $product_id);
 			$post_id = is_string(get_post_status($linked_id)) ? $linked_id : $product_id;
 				if (get_post_type($post_id) == MPTBM_Function::get_cpt()) {
-					$start_place = isset($_POST['mptbm_start_place']) ? sanitize_text_field($_POST['mptbm_start_place']) : '';
-					$end_place = isset($_POST['mptbm_end_place']) ? sanitize_text_field($_POST['mptbm_end_place']) : '';
+					$start_place = isset($_POST['mptbm_start_place']) ? sanitize_text_field(wp_unslash($_POST['mptbm_start_place'])) : '';
+					$end_place = isset($_POST['mptbm_end_place']) ? sanitize_text_field(wp_unslash($_POST['mptbm_end_place'])) : '';
 					$context = MPTBM_Function::get_checkout_search_context($start_place, $end_place, $mptbm_original_price_base);
 					if (is_wp_error($context)) {
 						return $cart_item_data;
 					}
 					$distance = absint($context['distance'] ?? 0);
 					$duration = absint($context['duration'] ?? 0);
-				$start_place = isset($_POST['mptbm_start_place']) ? sanitize_text_field($_POST['mptbm_start_place']) : '';
-				$end_place = isset($_POST['mptbm_end_place']) ? sanitize_text_field($_POST['mptbm_end_place']) : '';
+				$start_place = isset($_POST['mptbm_start_place']) ? sanitize_text_field(wp_unslash($_POST['mptbm_start_place'])) : '';
+				$end_place = isset($_POST['mptbm_end_place']) ? sanitize_text_field(wp_unslash($_POST['mptbm_end_place'])) : '';
 				$extra_stop_places = isset($context['extra_stop_places']) && is_array($context['extra_stop_places']) ? $context['extra_stop_places'] : array();
 					$waiting_time = absint($context['waiting_time'] ?? 0);
 					$return       = max(1, absint($context['two_way'] ?? 1));
@@ -641,9 +641,45 @@ if (!class_exists('MPTBM_Woocommerce')) {
 					// Format date and time for Google Calendar
 					$formatted_date_time = $start_date_time->format('Ymd\THis\Z'); // Start time in Google Calendar format
 
-					// For the event end time (assuming 1 hour duration)
+					// Default: a 2-hour placeholder block for the pickup leg alone.
 					$end_date_time = clone $start_date_time;
-					$end_date_time->modify('+2  hour'); // Set the end time to 1 hour later
+					$end_date_time->modify('+2  hour');
+
+					// A return booking with its own captured return date/time (only saved
+					// when Settings > General > "Enable Return In Different Date" is on -
+					// see checkout_create_order_line_item() above) spans the whole round
+					// trip instead, so the calendar event runs from pickup through the
+					// actual return rather than always ending 2 hours after pickup
+					// regardless of when the vehicle is really expected back.
+					$is_return_event = false;
+					$return_datetime_string = '';
+					if ($return && $return > 1) {
+						$calendar_return_date = $values['mptbm_return_target_date'] ?? '';
+						$calendar_return_time = $values['mptbm_return_target_time'] ?? '';
+						if (!empty($calendar_return_date) && $calendar_return_date !== '0') {
+							$return_datetime_string = $calendar_return_date;
+							if (!empty($calendar_return_time) && $calendar_return_time !== '0') {
+								if (is_numeric($calendar_return_time)) {
+									$r_hours = floor($calendar_return_time);
+									$r_minutes = round(($calendar_return_time - $r_hours) * 100);
+									$return_datetime_string .= ' ' . sprintf('%02d:%02d', $r_hours, $r_minutes);
+								} else {
+									$return_datetime_string .= ' ' . $calendar_return_time;
+								}
+							}
+							try {
+								$return_date_time = new DateTime($return_datetime_string, $timezone);
+								$return_date_time->setTimezone(new DateTimeZone('UTC'));
+								if ($return_date_time > $start_date_time) {
+									$end_date_time = $return_date_time;
+									$is_return_event = true;
+								}
+							} catch (Exception $e) {
+								// Unparseable return date/time - fall back to the 2-hour
+								// pickup-only block set above rather than breaking checkout.
+							}
+						}
+					}
 					$formatted_end_time = $end_date_time->format('Ymd\THis\Z'); // End time in Google Calendar format
 					$driver_id = get_post_meta($post_id, 'mptbm_selected_driver', true);
 					if ($driver_id) {
@@ -657,6 +693,9 @@ if (!class_exists('MPTBM_Woocommerce')) {
 
 					// Build the details string conditionally
 					$details = "Transport service from " . $start_location . " to " . $end_location;
+					if ($is_return_event) {
+						$details .= ". Return journey included - back by " . MP_Global_Function::date_format($return_datetime_string);
+					}
 					if ($driver_email) {
 						$details .= ". Driver email: " . $driver_email;
 					}
@@ -1598,11 +1637,125 @@ if (!class_exists('MPTBM_Woocommerce')) {
 			}
 		}
 
+		/**
+		 * Custom fields added via Checkout Fields > Billing Fields (option
+		 * 'mptbm_custom_checkout_fields', managed by MPTBM_Wc_Checkout_Fields /
+		 * MPTBM_Wc_Checkout_Fields_Helper) are a completely separate registry from
+		 * the "Additional Information" fields below (option
+		 * 'mptbm_checkout_fields_settings'), which is the only one
+		 * display_custom_fields_in_admin_order()/add_custom_fields_to_email() used
+		 * to read. A field added through Billing Fields - e.g. a custom "Flight
+		 * Number" field - showed correctly on checkout and was saved to the order
+		 * (WooCommerce itself persists any injected billing_* field as order meta
+		 * '_' . $key - see WC_Checkout::create_order()), but never appeared in the
+		 * admin order screen or in order emails, because neither function knew
+		 * this second registry existed. This reads it the same way, so both
+		 * callers can merge it in.
+		 *
+		 * @return array<string,array{label:string,value:string}>
+		 */
+		private function get_billing_fields_custom_entries($order_id) {
+			$sections = get_option('mptbm_custom_checkout_fields', array());
+			if (!is_array($sections)) {
+				return array();
+			}
+			$entries = array();
+			foreach ($sections as $section_fields) {
+				if (!is_array($section_fields)) {
+					continue;
+				}
+				foreach ($section_fields as $key => $field) {
+					if (!is_array($field) || !empty($field['deleted']) || !empty($field['disabled'])) {
+						continue;
+					}
+					$label = (string) ($field['label'] ?? $key);
+					$type = (string) ($field['type'] ?? '');
+					$value = get_post_meta($order_id, '_' . $key, true);
+					if ($value === '' || $value === null) {
+						continue;
+					}
+					if ($type === 'file') {
+						$file_url = esc_url((string) $value);
+						$file_name = basename($file_url);
+						$entries[$key] = array('label' => $label, 'value' => '<a href="' . $file_url . '" target="_blank" rel="noopener">' . esc_html($file_name) . '</a>');
+					} elseif (is_array($value)) {
+						$entries[$key] = array('label' => $label, 'value' => implode(', ', array_map('esc_html', $value)));
+					} else {
+						$entries[$key] = array('label' => $label, 'value' => esc_html((string) $value));
+					}
+				}
+			}
+			return $entries;
+		}
+
+		/**
+		 * Counterpart to get_billing_fields_custom_entries() for orders placed
+		 * through the WooCommerce Checkout *block* instead of the classic
+		 * [woocommerce_checkout] shortcode - see
+		 * MPTBM_Wc_Checkout_Fields_Helper::register_block_checkout_fields(),
+		 * which registers the same Billing Fields admin entries under
+		 * WooCommerce's own block-checkout field API so they're collected at
+		 * all on that checkout type. Values for those live in WooCommerce's
+		 * own storage (read via its CheckoutFields service, not raw postmeta -
+		 * the exact meta key is a WooCommerce implementation detail this
+		 * plugin shouldn't hardcode), and that service itself already refuses
+		 * to return anything for an order that wasn't actually placed via the
+		 * block/Store API, so this is always empty for a classic-checkout
+		 * order - safe to call unconditionally alongside the method above.
+		 *
+		 * @return array<string,array{label:string,value:string}>
+		 */
+		private function get_block_checkout_custom_entries($order) {
+			if (!class_exists('MPTBM_Wc_Checkout_Fields_Helper') || !function_exists('wc_get_container')) {
+				return array();
+			}
+			$checkout_fields_class = 'Automattic\\WooCommerce\\Blocks\\Domain\\Services\\CheckoutFields';
+			if (!class_exists($checkout_fields_class)) {
+				return array();
+			}
+			try {
+				$service = wc_get_container()->get($checkout_fields_class);
+			} catch (Exception $e) {
+				return array();
+			}
+			if (!$service) {
+				return array();
+			}
+
+			$sections = get_option('mptbm_custom_checkout_fields', array());
+			if (!is_array($sections)) {
+				return array();
+			}
+			$values_by_block_id = $service->get_order_additional_fields_with_values($order, 'order', 'other', 'view');
+
+			$entries = array();
+			foreach ($sections as $section_fields) {
+				if (!is_array($section_fields)) {
+					continue;
+				}
+				foreach ($section_fields as $key => $field) {
+					if (!is_array($field) || !empty($field['deleted']) || !empty($field['disabled'])) {
+						continue;
+					}
+					$block_id = MPTBM_Wc_Checkout_Fields_Helper::get_block_checkout_field_id($key);
+					if (!isset($values_by_block_id[$block_id]['value'])) {
+						continue;
+					}
+					$value = $values_by_block_id[$block_id]['value'];
+					if ($value === '' || $value === null) {
+						continue;
+					}
+					$label = (string) ($field['label'] ?? $key);
+					$entries[$key] = array('label' => $label, 'value' => esc_html((string) $value));
+				}
+			}
+			return $entries;
+		}
+
 		public function display_custom_fields_in_admin_order($order) {
 			$settings = get_option('mptbm_checkout_fields_settings', array());
 			$fields = isset($settings['fields']) ? $settings['fields'] : array();
-			if (!$fields) return;
-			echo '<div class="mptbm-custom-fields"><h3>' . esc_html__('Custom Booking Details', 'ecab-taxi-booking-manager') . '</h3><table>';
+			$custom_fields = array();
 			foreach ($fields as $key => $field) {
 				if (empty($field['show'])) continue;
 				$label = (string)($field['label'] ?? '');
@@ -1612,15 +1765,21 @@ if (!class_exists('MPTBM_Woocommerce')) {
 					if ($type === 'file') {
 						$file_url = esc_url((string)$value);
 						$file_name = basename((string)$file_url);
-						echo '<tr><th style="text-align:left;">' . esc_html($label) . ':</th><td><a href="' . $file_url . '" target="_blank" rel="noopener">' . esc_html($file_name) . '</a></td></tr>';
+						$custom_fields[$key] = array('label' => $label, 'value' => '<a href="' . $file_url . '" target="_blank" rel="noopener">' . esc_html($file_name) . '</a>');
 					} else if (is_array($value)) {
 						$value = implode(', ', array_map(function($v){ return esc_html((string)$v); }, $value));
-						echo '<tr><th style="text-align:left;">' . esc_html($label) . ':</th><td>' . $value . '</td></tr>';
+						$custom_fields[$key] = array('label' => $label, 'value' => $value);
 					} else {
 						$value = esc_html((string)$value);
-						echo '<tr><th style="text-align:left;">' . esc_html($label) . ':</th><td>' . $value . '</td></tr>';
+						$custom_fields[$key] = array('label' => $label, 'value' => $value);
 					}
 				}
+			}
+			$custom_fields = array_merge($custom_fields, $this->get_billing_fields_custom_entries($order->get_id()), $this->get_block_checkout_custom_entries($order));
+			if (!$custom_fields) return;
+			echo '<div class="mptbm-custom-fields"><h3>' . esc_html__('Custom Booking Details', 'ecab-taxi-booking-manager') . '</h3><table>';
+			foreach ($custom_fields as $entry) {
+				echo '<tr><th style="text-align:left;">' . esc_html($entry['label']) . ':</th><td>' . $entry['value'] . '</td></tr>';
 			}
 			echo '</table></div>';
 		}
@@ -1648,6 +1807,7 @@ if (!class_exists('MPTBM_Woocommerce')) {
 					}
 				}
 			}
+			$custom_fields = array_merge($custom_fields, $this->get_billing_fields_custom_entries($order->get_id()), $this->get_block_checkout_custom_entries($order));
 			return array_merge($fields, $custom_fields);
 		}
 

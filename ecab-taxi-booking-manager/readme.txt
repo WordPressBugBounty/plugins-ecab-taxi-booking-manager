@@ -1,5 +1,5 @@
 === E-cab Taxi Booking Manager for Woocommerce ===
-Contributors: magepeopleteam, hamidxazad, aamahin
+Contributors: magepeopleteam, hamidxazad, aamahin, raselsha
 Author URI : https://mage-people.com
 Tags: Taxi booking, Cab booking, Ride booking , Chauffeur service, Airport transfer, Distance based pricing, Fare calculator, Car booking, Map Booking, Limousine service, Transportation, Dispatch system
 Requires at least: 5.3
@@ -219,6 +219,16 @@ Appneck SDK **does not gather any data by default.** The SDK only starts gatheri
 Learn more about how [Appneck collects and uses this data](https://appneck.com/privacy-policy/).
 
 == Changelog ==
+= 2.1.5 - 2026-10-12 =
+* Fixed: A vehicle set to "Combined Pricing Model" with the "Manual Pricing" route table filled in (per-route fixed fares) never showed up in a Manual-mode search (`price_based='manual'`), even for a route it had explicitly priced - the search only ever matched vehicles whose Pricing Model was set to "Manual" itself. It now also matches a Combined Pricing vehicle for routes it has configured in its Manual Pricing table, priced at that route's fixed fare; it's skipped for any route not in that table, so it never appears at an unpriced $0.
+* Fixed: Searching with `price_based='fixed_route'` always failed with a "Please enter a dropoff location" error and a blocked Search button, even though Fixed Route mode has no drop-off field by design - the form's drop-off validation only recognized Fixed Hourly as a mode allowed to skip that field. Fixed Route is now recognized the same way, matching how the field is already hidden for it.
+* Fixed: On `price_based='manual'` bookings, the Route Planning form and the map were stacked on top of each other instead of side by side, unlike every other pricing mode's search page.
+* Fixed: The Bookings list (Pro) showed a "Return" badge for round-trip bookings but never the actual return date/time, even when it had been captured - there was nowhere in the list to see it. It now shows next to the Return badge when available.
+* Fixed (Pro): The Google Calendar sync (Settings > Google Calendar) only ever created an event covering the pickup leg, even for a round-trip booking with a captured return date/time - the return journey was silently left out, always ending a fixed duration after pickup regardless of when the vehicle was actually due back. The synced event now extends through to the actual return date/time when one was captured, and notes the return in its description.
+* Fixed: A round-trip booking's return date/time wasn't shown on the Booking Detail page (Pro) or in the booking confirmation email, even when it had been captured. Both now show a Return Date row when available. (The PDF/thermal receipt already showed this correctly.)
+* Fixed: A custom field added via Settings > Checkout Fields > Billing Fields (e.g. a "Flight Number" field) was collected at checkout and saved with the order, but never appeared on the admin order screen or in order emails - those only looked at a separate, older custom-fields list. Fields added through Billing Fields now show in both places too.
+* Added: Checkout Fields > Billing Fields (text and select field types) now also work on a site using the WooCommerce Checkout block instead of the classic `[woocommerce_checkout]` shortcode - previously these fields only ever appeared on classic checkout, since the block checkout doesn't use the same field hook at all. They now appear in the block checkout's "Additional information" area too, and their values flow through to the admin order screen and order emails exactly like classic-checkout fields do. (Fields of type "Image" still require classic checkout - the block checkout has no file-upload field type to register them as.)
+
 = 2.1.4 - 2026-10-06 =
 * Fix: Updated the bundled Appneck SDK to the latest version.
 

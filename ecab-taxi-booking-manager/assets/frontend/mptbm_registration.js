@@ -2790,8 +2790,11 @@ function mptbm_init_google_map() {
             let startMsg = price_based === 'manual' || price_based === 'fixed_zone' ? 'Please select a pickup location' : 'Please enter a pickup location';
             if (start_place) showLocationError(start_place, startMsg);
         } else if (!end_place_value || (end_place && end_place.tagName === 'SELECT' && end_place.options[end_place.selectedIndex] && end_place.options[end_place.selectedIndex].disabled)) {
-            // Check if dropoff is required (not hidden for hourly)
-            let hideDropoff = parent.find('[name="mptbm_original_price_base"]').val() === 'fixed_hourly' &&
+            // Check if dropoff is required - hidden for hourly (when its own
+            // disable-dropoff setting is on) and always for fixed_route, matching
+            // $hide_dropoff in templates/registration/get_details.php.
+            let mptbmOriginalPriceBase = parent.find('[name="mptbm_original_price_base"]').val();
+            let hideDropoff = (mptbmOriginalPriceBase === 'fixed_hourly' || mptbmOriginalPriceBase === 'fixed_route') &&
                 document.getElementById('mptbm_map_end_place').type === 'hidden';
             if (!hideDropoff) {
                 end_place.focus();
@@ -4388,12 +4391,12 @@ function mptbm_calculate_base_distances(settings, pickup, dropoff, callback) {
         if (customMessage) {
             // If there's a custom message, show it with quantity
             $summary.find('.mptbm_product_price').html(
-                'x' + updatedVal + ' <span style="color:#000;">|&nbsp;&nbsp;</span>' + customMessage
+                '<span class="mptbm_product_qty">x' + updatedVal + '</span><span class="mptbm_product_price_value">' + customMessage + '</span>'
             );
         } else {
             // If no custom message, show price as before
             $summary.find('.mptbm_product_price').html(
-                'x' + updatedVal + ' <span style="color:#000;">|&nbsp;&nbsp;</span>' + mp_price_format(transportPrice * updatedVal)
+                '<span class="mptbm_product_qty">x' + updatedVal + '</span><span class="mptbm_product_price_value">' + mp_price_format(transportPrice * updatedVal) + '</span>'
             );
         }
 
@@ -4453,11 +4456,11 @@ function mptbm_calculate_base_distances(settings, pickup, dropoff, callback) {
                 let customMessage = $this.closest('.mptbm_booking_item').find('.mptbm-custom-price-message').html();
                 if (customMessage) {
                     target_summary.find('.mptbm_product_price').html(
-                        'x' + quantityVal + ' <span style="color:#000;">|&nbsp;&nbsp;</span> ' + customMessage
+                        '<span class="mptbm_product_qty">x' + quantityVal + '</span><span class="mptbm_product_price_value">' + customMessage + '</span>'
                     );
                 } else {
                     target_summary.find('.mptbm_product_price').html(
-                        'x' + quantityVal + ' <span style="color:#000;">|&nbsp;&nbsp;</span> ' + mp_price_format(transport_price * quantityVal)
+                        '<span class="mptbm_product_qty">x' + quantityVal + '</span><span class="mptbm_product_price_value">' + mp_price_format(transport_price * quantityVal) + '</span>'
                     );
                 }
 
