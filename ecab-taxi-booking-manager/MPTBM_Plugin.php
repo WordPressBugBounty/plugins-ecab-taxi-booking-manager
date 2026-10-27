@@ -3,7 +3,7 @@
  * Plugin Name: E-cab Taxi Booking Manager for Woocommerce
  * Plugin URI: https://wordpress.org/plugins/ecab-taxi-booking-manager/
  * Description: A Complete Transportation Solution for WordPress by MagePeople.
- * Version: 2.1.6
+ * Version: 2.1.7
  * Author: MagePeople Team
  * Author URI: http://www.mage-people.com/
  * License: GPL v2 or later
@@ -59,6 +59,7 @@ if (!class_exists('MPTBM_Plugin')) {
             // Warn when fares are being calculated from the OSRM fallback because
             // Google refused the server-side lookup (see MPTBM_Function::map_server_api_key).
             add_action('admin_notices', array($this, 'show_map_api_failure_notice'));
+            add_action('admin_notices', array($this, 'show_geocode_failure_notice'));
         }
 
         private function load_plugin(): void
@@ -74,7 +75,7 @@ if (!class_exists('MPTBM_Plugin')) {
                 // define('MPTBM_PLUGIN_DATA', get_plugin_data(__FILE__));
             }
             if (!defined('MPTBM_PLUGIN_VERSION')) {
-                define('MPTBM_PLUGIN_VERSION', '2.1.6');
+                define('MPTBM_PLUGIN_VERSION', '2.1.7');
             }
 
             // Create required directories if they don't exist
@@ -219,6 +220,18 @@ if (!class_exists('MPTBM_Plugin')) {
 				// WordPress truncates the former 21-character slug to 20 characters.
 				// Migrate those legacy rows to the valid canonical CPT slug.
 				$wpdb->update($wpdb->posts, array('post_type' => 'mptbm_service_book'), array('post_type' => 'mptbm_service_bookin'), array('%s'), array('%s'));
+				return;
+			}
+			// The version flag only says the grant ran once. A role editor's
+			// "reset to defaults" (or any restore of the administrator role) drops
+			// the cap afterwards while the flag stays '2', and nothing re-granted
+			// it: the Transportation List still opens (it needs manage_options) but
+			// every vehicle Edit link comes out empty and post.php refuses the
+			// vehicle. Administrators always manage transportation, so put it back;
+			// shop_manager is left alone since removing it there can be deliberate.
+			$admin = get_role('administrator');
+			if ($admin && !$admin->has_cap('manage_mptbm_transportation')) {
+				$admin->add_cap('manage_mptbm_transportation');
 			}
 		}
 
@@ -612,6 +625,42 @@ if (!class_exists('MPTBM_Plugin')) {
             echo '<li>' . esc_html__('Best: paste an IP-restricted (or unrestricted) key with the Distance Matrix API and Directions API enabled into "Google MAP API Key (Server Side)". A key restricted by HTTP referrer works for the map in the browser but is always rejected for these server-side requests.', 'ecab-taxi-booking-manager') . '</li>';
             echo '<li>' . esc_html__('No second key available: set "Fare Distance Source" to "Browser, verified server-side". Trips are then priced on the distance Google already calculated in the customer\'s browser, which the server checks against the straight-line distance before accepting.', 'ecab-taxi-booking-manager') . '</li>';
             echo '</ol>';
+            echo '</div>';
+        }
+
+        /**
+         * The server-side address check (MPTBM_Function::verify_place_coordinates()) is degraded.
+         *
+         * Either Google refused the Geocoding request - addresses are then checked against
+         * OpenStreetMap only, which reads fewer of Google's address formats - or no geocoder
+         * could be reached at all, in which case "Strict" refuses distance searches until one is
+         * back. From the front end both just look like a fussy form, so the admin is told.
+         */
+        public function show_geocode_failure_notice()
+        {
+            if (!current_user_can('manage_options') || !class_exists('MPTBM_Function')) {
+                return;
+            }
+            $failure = get_transient('mptbm_geocode_failure');
+            if (empty($failure['reason'])) {
+                return;
+            }
+            $google_denied = ($failure['type'] ?? '') === 'google_denied';
+            if ($google_denied && MP_Global_Function::get_settings('mptbm_map_api_settings', 'display_map', 'openstreetmap') !== 'enable') {
+                return;
+            }
+            $settings_url = admin_url('edit.php?post_type=mptbm_rent&page=mptbm_settings_page');
+            echo '<div class="notice notice-warning">';
+            echo '<p><strong>' . esc_html__('E-Cab Taxi Booking Manager:', 'ecab-taxi-booking-manager') . '</strong> ';
+            if ($google_denied) {
+                echo esc_html__('Google refused the server-side address check, so pickup and drop-off addresses are being verified with OpenStreetMap instead. It recognises fewer address formats, so some customers may be asked to choose their address again.', 'ecab-taxi-booking-manager');
+            } else {
+                echo esc_html__('The server could not reach a geocoding service to verify pickup and drop-off addresses. While that lasts, distance-priced searches are refused when Address Verification is "Strict".', 'ecab-taxi-booking-manager');
+            }
+            echo '</p>';
+            echo '<p><code>' . esc_html($failure['reason']) . '</code></p>';
+            echo '<p>' . esc_html__('Fix: in', 'ecab-taxi-booking-manager') . ' <a href="' . esc_url($settings_url) . '">' . esc_html__('Map API Settings', 'ecab-taxi-booking-manager') . '</a> ';
+            echo esc_html__('add a server-side Google key (IP-restricted or unrestricted) with the Geocoding API enabled. If that is not possible, set "Address Verification" to "Flag only" and check flagged bookings on the order screen.', 'ecab-taxi-booking-manager') . '</p>';
             echo '</div>';
         }
 

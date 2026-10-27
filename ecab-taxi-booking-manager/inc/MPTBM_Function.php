@@ -148,6 +148,90 @@ if (!class_exists('MPTBM_Function')) {
 		}
 
 		/**
+		 * Which trip endpoints feed the fare through their coordinates, per search mode.
+		 *
+		 * The fare is measured between coordinates the browser posts, while the order and the
+		 * driver only ever see the place names posted next to them. Every endpoint listed here
+		 * must have its coordinates matched to its name (verify_place_coordinates()) before the
+		 * quote can be booked; otherwise a short route can be priced under a long trip's names.
+		 * Select-based endpoints (fixed_zone pickup, fixed_zone_dropoff drop-off) are admin
+		 * locations matched by name, so only the free-text side of those modes is listed.
+		 *
+		 * @return string[] Any of 'start', 'end', 'stops'; empty when coordinates don't affect the fare.
+		 */
+		public static function coordinate_priced_endpoints($price_based): array
+		{
+			switch (sanitize_key((string) $price_based)) {
+				case 'dynamic':
+				case 'fixed_distance':
+				case 'fixed_map':
+					return array('start', 'end', 'stops');
+				case 'fixed_zone':
+					return array('end');
+				case 'fixed_zone_dropoff':
+					return array('start');
+			}
+			return array();
+		}
+
+		/**
+		 * 'strict' (default) refuses a search whose address can't be matched to its coordinates;
+		 * 'flag' lets it through and marks the booking "not verified" for the operator to check.
+		 */
+		public static function address_verification_mode(): string
+		{
+			$mode = MP_Global_Function::get_settings('mptbm_map_api_settings', 'mptbm_address_verification', 'strict');
+			return $mode === 'flag' ? 'flag' : 'strict';
+		}
+
+		/**
+		 * The route the fare was actually measured on, as booking meta.
+		 *
+		 * Stored next to the place names on the order item and the booking so the operator can
+		 * see where the priced route really runs (and whether its addresses were verified).
+		 */
+		public static function route_record(array $context): array
+		{
+			$format = static function ($coords): string {
+				$coords = self::normalize_coordinates($coords);
+				return $coords ? sprintf('%.6F,%.6F', $coords['latitude'], $coords['longitude']) : '';
+			};
+			$stops = array();
+			foreach ((array) ($context['extra_stop_coords'] ?? array()) as $stop) {
+				$stops[] = $format($stop);
+			}
+			$check = '';
+			if (!empty($context['location_checked'])) {
+				$check = !empty($context['location_verified']) ? 'verified' : 'unverified';
+			}
+			return array(
+				'mptbm_start_coords'      => $format($context['start_coords'] ?? array()),
+				'mptbm_end_coords'        => $format($context['end_coords'] ?? array()),
+				'mptbm_extra_stop_coords' => implode('|', array_filter($stops)),
+				'mptbm_address_check'     => $check,
+			);
+		}
+
+		/** A Google Maps directions link for a route_record() (empty without both endpoints). */
+		public static function route_record_map_url(array $record): string
+		{
+			$point = static function ($value): string {
+				return preg_match('/^-?\d{1,3}\.\d+,-?\d{1,3}\.\d+$/', (string) $value) ? (string) $value : '';
+			};
+			$start = $point($record['mptbm_start_coords'] ?? '');
+			$end = $point($record['mptbm_end_coords'] ?? '');
+			if (!$start || !$end) {
+				return '';
+			}
+			$args = array('api' => 1, 'origin' => $start, 'destination' => $end, 'travelmode' => 'driving');
+			$stops = array_filter(array_map($point, explode('|', (string) ($record['mptbm_extra_stop_coords'] ?? ''))));
+			if ($stops) {
+				$args['waypoints'] = implode('|', $stops);
+			}
+			return 'https://www.google.com/maps/dir/?' . http_build_query($args);
+		}
+
+		/**
 		 * Validate that checkout is using the server-side search which produced the quote.
 		 * Returns the context or a WP_Error suitable for a customer-facing checkout error.
 		 */
@@ -167,6 +251,15 @@ if (!class_exists('MPTBM_Function')) {
 			$distance_modes = array('dynamic', 'fixed_distance', 'fixed_map');
 			if (in_array(sanitize_key($context['price_based'] ?? ''), $distance_modes, true) && empty($context['distance_verified'])) {
 				return new WP_Error('mptbm_quote_unverified', __('The route could not be verified by the server. Please try the search again.', 'ecab-taxi-booking-manager'));
+			}
+			// The search must also have matched each priced endpoint's coordinates to its name.
+			// A quote saved before this check existed carries neither flag and is refused too.
+			if (self::coordinate_priced_endpoints($context['price_based'] ?? '')) {
+				$accepted = !empty($context['location_verified'])
+					|| (!empty($context['location_checked']) && self::address_verification_mode() === 'flag');
+				if (!$accepted) {
+					return new WP_Error('mptbm_quote_location', __('The pickup or drop-off address could not be matched to its map location. Please search for the trip again.', 'ecab-taxi-booking-manager'));
+				}
 			}
 			if (sanitize_key($context['price_based'] ?? '') === 'fixed_hourly') {
 				$hours = self::normalize_fixed_time($context['fixed_time'] ?? 0);
@@ -232,18 +325,34 @@ if (!class_exists('MPTBM_Function')) {
 			if (count($base) !== 2 || !is_numeric($base[0]) || !is_numeric($base[1]) || !$pickup || !$dropoff) {
 				return 0.0;
 			}
+			$base = array('latitude' => $base[0], 'longitude' => $base[1]);
+
+			$price = self::base_location_leg_price($settings, $base, $pickup, $dropoff);
+			// A return on its own date is a second, separate pickup at the drop-off point:
+			// the car drives out from base to it and back to base after dropping the
+			// customer at the original pickup. That leg is charged on its own, exactly as
+			// booking it as a second one-way trip would be.
+			if (absint($context['two_way'] ?? 1) > 1 && MP_Global_Function::get_settings('mptbm_general_settings', 'enable_return_in_different_date') == 'yes') {
+				$price += self::base_location_leg_price($settings, $base, $dropoff, $pickup);
+			}
+			return $price;
+		}
+
+		/** Base charge for one leg: base to its pickup and/or its drop-off back to base, less the free threshold. */
+		private static function base_location_leg_price(array $settings, array $base, array $pickup, array $dropoff): float
+		{
+			$runs = array();
+			if ('yes' === $settings['charge_pickup']) {
+				$runs[] = array($base, $pickup);
+			}
+			if ('yes' === $settings['charge_dropoff']) {
+				$runs[] = array($dropoff, $base);
+			}
 
 			$distance = 0.0;
 			$duration = 0.0;
-			if ('yes' === $settings['charge_pickup']) {
-				$data = self::get_server_distance($base[0], $base[1], $pickup['latitude'], $pickup['longitude']);
-				if (is_array($data)) {
-					$distance += (float) ($data['distance'] ?? 0);
-					$duration += (float) ($data['duration'] ?? 0);
-				}
-			}
-			if ('yes' === $settings['charge_dropoff']) {
-				$data = self::get_server_distance($dropoff['latitude'], $dropoff['longitude'], $base[0], $base[1]);
+			foreach ($runs as $run) {
+				$data = self::base_location_run($run[0], $run[1]);
 				if (is_array($data)) {
 					$distance += (float) ($data['distance'] ?? 0);
 					$duration += (float) ($data['duration'] ?? 0);
@@ -259,6 +368,17 @@ if (!class_exists('MPTBM_Function')) {
 			$charged_km = max(0, $km - (float) $settings['threshold']);
 			$charged_hr = $km > 0 ? ($duration / 3600) * ($charged_km / $km) : 0;
 			return max(0.0, ($charged_km * (float) $settings['price_km']) + ($charged_hr * (float) $settings['price_hour']));
+		}
+
+		/** Route data for one base run, fetched once per request: every vehicle on a results page asks for the same runs. */
+		private static function base_location_run(array $from, array $to)
+		{
+			static $runs = array();
+			$key = implode(',', array($from['latitude'], $from['longitude'], $to['latitude'], $to['longitude']));
+			if (!array_key_exists($key, $runs)) {
+				$runs[$key] = self::get_server_distance($from['latitude'], $from['longitude'], $to['latitude'], $to['longitude']);
+			}
+			return $runs[$key];
 		}
 
 		//**************Support multi Language*********************//
@@ -891,9 +1011,34 @@ if (!class_exists('MPTBM_Function')) {
 						}
 					}
 
+					// Per-area discounted per-km rate (see get_operation_area_discounted_km_rate()) -
+					// the simpler, Operation-Area-side counterpart to the per-vehicle override just
+					// above; only ever lowers the rate actually used, never raises it, and applies
+					// even without a session match (coordinate-matched directly, like the minimum
+					// price floor below) so it isn't limited to whatever choose_vehicles.php happened
+					// to already match this request against.
+					$area_km_rate = self::get_operation_area_discounted_km_rate(
+						$post_id,
+						$pickup_coords_hint ?: ($search_context['start_coords'] ?? null),
+						$dropoff_coords_hint ?: ($search_context['end_coords'] ?? null)
+					);
+					if ($area_km_rate > 0 && ($km_price <= 0 || $area_km_rate < $km_price)) {
+						$km_price = $area_km_rate;
+					}
+
 					$price = $hour_price * ((float) $duration / 3600) + $km_price * self::distance_in_unit($distance);
 				} elseif ($price_based == 'distance' && $original_price_based == 'dynamic') {
 					$km_price = (float) MP_Global_Function::get_post_info($post_id, 'mptbm_km_price');
+					// Per-area discounted per-km rate (see get_operation_area_discounted_km_rate()) -
+					// only ever lowers the rate actually used, never raises it.
+					$area_km_rate = self::get_operation_area_discounted_km_rate(
+						$post_id,
+						$pickup_coords_hint ?: ($search_context['start_coords'] ?? null),
+						$dropoff_coords_hint ?: ($search_context['end_coords'] ?? null)
+					);
+					if ($area_km_rate > 0 && ($km_price <= 0 || $area_km_rate < $km_price)) {
+						$km_price = $area_km_rate;
+					}
 					$price = $km_price * self::distance_in_unit($distance);
 				} elseif ($price_based == 'duration' && ($original_price_based == 'fixed_hourly' || $original_price_based == 'dynamic')) {
 					$hour_price = (float) MP_Global_Function::get_post_info($post_id, 'mptbm_hour_price');
@@ -901,6 +1046,14 @@ if (!class_exists('MPTBM_Function')) {
 				} elseif ($price_based == 'distance_duration' && $original_price_based == 'dynamic') {
 					$hour_price = (float) MP_Global_Function::get_post_info($post_id, 'mptbm_hour_price');
 					$km_price = (float) MP_Global_Function::get_post_info($post_id, 'mptbm_km_price');
+					$area_km_rate = self::get_operation_area_discounted_km_rate(
+						$post_id,
+						$pickup_coords_hint ?: ($search_context['start_coords'] ?? null),
+						$dropoff_coords_hint ?: ($search_context['end_coords'] ?? null)
+					);
+					if ($area_km_rate > 0 && ($km_price <= 0 || $area_km_rate < $km_price)) {
+						$km_price = $area_km_rate;
+					}
 					$price = $hour_price * ((float) $duration / 3600) + $km_price * self::distance_in_unit($distance);
 				} elseif (($price_based == 'inclusive' || $price_based == 'fixed_hourly') && $original_price_based == 'fixed_hourly') {
 					$hour_price = (float) MP_Global_Function::get_post_info($post_id, 'mptbm_hour_price');
@@ -1128,7 +1281,13 @@ if (!class_exists('MPTBM_Function')) {
 					if (sizeof($assigned_routes) > 0) {
 						foreach ($assigned_routes as $assigned_route) {
 							$route_id = array_key_exists('route_id', $assigned_route) ? absint($assigned_route['route_id']) : 0;
-							$route_name = ($route_id && get_post_status($route_id) === 'publish') ? get_the_title($route_id) : '';
+							// Same html_entity_decode() as get_all_routes()/get_route_waypoints_map()
+							// (MPTBM_Function) - $start_place arrives from the browser already
+							// HTML-entity-decoded (it's a <select> option's .value), so without this
+							// decode here too, a route name containing " - " (wptexturize'd by
+							// get_the_title() into "&#8211;") would never match, silently pricing
+							// every vehicle at 0 and showing "No Transport Available".
+							$route_name = ($route_id && get_post_status($route_id) === 'publish') ? html_entity_decode(get_the_title($route_id), ENT_QUOTES, 'UTF-8') : '';
 							if ($start_place !== '' && $route_name !== '' && $start_place == $route_name) {
 								$price = (float) ($assigned_route['price'] ?? 0);
 							}
@@ -1360,8 +1519,17 @@ if (!class_exists('MPTBM_Function')) {
 				$price = apply_filters('mptbm_calculate_price', $price, $post_id, $selected_start_date, $selected_start_time, $extra_data);
 			}
 
-
-
+			// Per-area minimum fare (see get_operation_area_minimum_price()) -
+			// applied last, after every other pricing branch/filter above, so it
+			// floors the actual final price rather than an intermediate one.
+			$area_min_price = self::get_operation_area_minimum_price(
+				$post_id,
+				$pickup_coords_hint ?: ($search_context['start_coords'] ?? null),
+				$dropoff_coords_hint ?: ($search_context['end_coords'] ?? null)
+			);
+			if ($area_min_price > 0 && $area_min_price > $price) {
+				$price = $area_min_price;
+			}
 
 			return (float) $price;
 
@@ -1760,6 +1928,172 @@ if (!class_exists('MPTBM_Function')) {
 			return $items;
 		}
 
+		/**
+		 * Per-request cache of Operation Areas that have a Minimum Price
+		 * configured - populated once per get_operation_area_minimum_price()
+		 * call chain (a search prices several vehicles, one query is enough).
+		 */
+		private static $operation_area_min_price_zones = null;
+
+		/**
+		 * Optional per-area minimum fare: when a Single Operation Area has a
+		 * "Minimum Price" set (Operation Areas screen), a trip whose pickup or
+		 * dropoff falls inside it is floored to at least that price - but only
+		 * for a vehicle that has that Operation Area selected (its own
+		 * mptbm_selected_operation_areas), the same opt-in every other
+		 * area-based pricing feature in this plugin (surcharge, fixed price
+		 * override) already requires. It does NOT apply to a vehicle with no
+		 * Operation Area selected, or one scoped to a different area - confirmed
+		 * with the user after an initial version floored every vehicle
+		 * unconditionally, including ones with nothing selected, which
+		 * surprised them. A no-op for every existing site unless an admin
+		 * explicitly sets this on an Operation Area AND assigns that area to a
+		 * vehicle (the meta query below then returns nothing and this function
+		 * short-circuits to 0 every time).
+		 *
+		 * Reuses is_point_in_fixed_zone() (same matching already used for
+		 * Fixed Zone pricing and the service-area restriction above) rather
+		 * than adding new polygon-matching code.
+		 *
+		 * @param int        $post_id      The vehicle being priced.
+		 * @param array|null $start_coords ['latitude'=>, 'longitude'=>] or ['lat'=>, 'lng'=>]
+		 * @param array|null $end_coords   Same shape as $start_coords.
+		 * @return float The highest matching area minimum, or 0 if none matched.
+		 */
+		public static function get_operation_area_minimum_price($post_id, $start_coords, $end_coords) {
+			if (empty($start_coords) && empty($end_coords)) {
+				return 0;
+			}
+
+			$selected_areas = get_post_meta($post_id, 'mptbm_selected_operation_areas', true);
+			if (empty($selected_areas) || !is_array($selected_areas)) {
+				return 0;
+			}
+
+			if (self::$operation_area_min_price_zones === null) {
+				self::$operation_area_min_price_zones = get_posts(array(
+					'post_type'      => 'mptbm_operate_areas',
+					'post_status'    => 'publish',
+					'posts_per_page' => -1,
+					'fields'         => 'ids',
+					'meta_query'     => array(
+						array(
+							'key'     => 'mptbm-operation-area-min-price',
+							'value'   => 0,
+							'compare' => '>',
+							'type'    => 'NUMERIC',
+						),
+					),
+				));
+			}
+
+			if (empty(self::$operation_area_min_price_zones)) {
+				return 0;
+			}
+
+			$matched_min = 0;
+			foreach (self::$operation_area_min_price_zones as $area_id) {
+				if (!in_array((int) $area_id, array_map('intval', $selected_areas), true)) {
+					continue;
+				}
+				$area_min_price = (float) get_post_meta($area_id, 'mptbm-operation-area-min-price', true);
+				if ($area_min_price <= 0 || $area_min_price <= $matched_min) {
+					continue;
+				}
+				$area_location = 'post_' . $area_id;
+				$in_area = (!empty($start_coords) && self::is_point_in_fixed_zone($area_location, $start_coords))
+					|| (!empty($end_coords) && self::is_point_in_fixed_zone($area_location, $end_coords));
+				if ($in_area) {
+					$matched_min = $area_min_price;
+				}
+			}
+
+			return $matched_min;
+		}
+
+		/**
+		 * Per-request cache of Operation Areas that have a Discounted Per KM
+		 * Rate configured - same pattern as $operation_area_min_price_zones
+		 * above, populated once per get_operation_area_discounted_km_rate()
+		 * call chain.
+		 */
+		private static $operation_area_discount_km_zones = null;
+
+		/**
+		 * Optional per-area discounted per-km rate: when a Single Operation
+		 * Area has a "Discounted Per KM Rate" set (Operation Areas screen), a
+		 * Dynamic (per-km) trip whose pickup or dropoff falls inside it is
+		 * priced at that rate instead of the vehicle's own per-km rate - but
+		 * only when it's actually lower, and only for a vehicle that has that
+		 * Operation Area selected (its own mptbm_selected_operation_areas),
+		 * the same opt-in get_operation_area_minimum_price() above already
+		 * uses. It does NOT touch which vehicles are shown for a search -
+		 * unlike mptbm_selected_operation_areas' other use in
+		 * choose_vehicles.php (the client-side visibility/geo-fence check),
+		 * this is applied purely inside get_price() via coordinate math, so a
+		 * vehicle stays visible/bookable for every trip exactly as before;
+		 * only the price for a matching trip changes. A no-op for every
+		 * existing site unless an admin explicitly sets this on an Operation
+		 * Area AND assigns that area to a vehicle.
+		 *
+		 * Reuses is_point_in_fixed_zone(), same as the minimum-price feature.
+		 *
+		 * @param int        $post_id      The vehicle being priced.
+		 * @param array|null $start_coords ['latitude'=>, 'longitude'=>] or ['lat'=>, 'lng'=>]
+		 * @param array|null $end_coords   Same shape as $start_coords.
+		 * @return float The lowest matching area rate, or 0 if none matched.
+		 */
+		public static function get_operation_area_discounted_km_rate($post_id, $start_coords, $end_coords) {
+			if (empty($start_coords) && empty($end_coords)) {
+				return 0;
+			}
+
+			$selected_areas = get_post_meta($post_id, 'mptbm_selected_operation_areas', true);
+			if (empty($selected_areas) || !is_array($selected_areas)) {
+				return 0;
+			}
+
+			if (self::$operation_area_discount_km_zones === null) {
+				self::$operation_area_discount_km_zones = get_posts(array(
+					'post_type'      => 'mptbm_operate_areas',
+					'post_status'    => 'publish',
+					'posts_per_page' => -1,
+					'fields'         => 'ids',
+					'meta_query'     => array(
+						array(
+							'key'     => 'mptbm-operation-area-discount-per-km',
+							'value'   => 0,
+							'compare' => '>',
+							'type'    => 'NUMERIC',
+						),
+					),
+				));
+			}
+
+			if (empty(self::$operation_area_discount_km_zones)) {
+				return 0;
+			}
+
+			$matched_rate = 0;
+			foreach (self::$operation_area_discount_km_zones as $area_id) {
+				if (!in_array((int) $area_id, array_map('intval', $selected_areas), true)) {
+					continue;
+				}
+				$area_rate = (float) get_post_meta($area_id, 'mptbm-operation-area-discount-per-km', true);
+				if ($area_rate <= 0 || ($matched_rate > 0 && $area_rate >= $matched_rate)) {
+					continue;
+				}
+				$area_location = 'post_' . $area_id;
+				$in_area = (!empty($start_coords) && self::is_point_in_fixed_zone($area_location, $start_coords))
+					|| (!empty($end_coords) && self::is_point_in_fixed_zone($area_location, $end_coords));
+				if ($in_area) {
+					$matched_rate = $area_rate;
+				}
+			}
+
+			return $matched_rate;
+		}
+
 		public static function get_base_price_settings($post_id) {
 
             $taxi_base_location_pricing = MP_Global_Function::get_post_info( $post_id, 'mptbm_display_taxi_base_location_pricing', 'off' );
@@ -2027,7 +2361,18 @@ if (!class_exists('MPTBM_Function')) {
 					$route_id = absint($assigned_route['route_id'] ?? 0);
 					// Skip routes trashed/deleted after being assigned to this
 					// vehicle - a stale ID shouldn't keep showing up to customers.
-					$name = ($route_id && get_post_status($route_id) === 'publish') ? get_the_title($route_id) : '';
+					// get_the_title() can come back with a literal HTML entity
+					// baked into the string (e.g. a route named with " - "
+					// gets wptexturize'd into "&#8211;" instead of a real
+					// dash character) - harmless printed inside HTML (the
+					// browser decodes it when parsing the <option> tag), but
+					// get_route_waypoints_map() below embeds the same name
+					// as a JSON object key inside a <script> block, where
+					// entities are NOT decoded - the two ended up as
+					// different strings in the browser, so selecting the
+					// route could never find its own waypoints. Decoding
+					// here keeps both call sites using the identical string.
+					$name = ($route_id && get_post_status($route_id) === 'publish') ? html_entity_decode(get_the_title($route_id), ENT_QUOTES, 'UTF-8') : '';
 					if ($name) {
 						$route_names[] = $name;
 					}
@@ -2060,7 +2405,10 @@ if (!class_exists('MPTBM_Function')) {
 					if (!$route_id || get_post_status($route_id) !== 'publish') {
 						continue;
 					}
-					$name = get_the_title($route_id);
+					// See the identical comment in get_all_routes() just above -
+					// this map's keys must match that function's route name
+					// strings exactly, or the frontend's lookup silently misses.
+					$name = html_entity_decode(get_the_title($route_id), ENT_QUOTES, 'UTF-8');
 					$waypoints = get_post_meta($route_id, 'mptbm_route_waypoints', true);
 					if ($name && $waypoints) {
 						$map[$name] = $waypoints;
@@ -2709,9 +3057,9 @@ if (!class_exists('MPTBM_Function')) {
 		 * Anything outside those bounds is rejected and the caller falls back to the
 		 * ordinary server-side lookup, so a failed check is never a cheaper fare.
 		 *
-		 * Note this deliberately does not make the coordinates themselves trustworthy -
-		 * they are already browser-supplied today and the server-side lookup routes
-		 * between whatever it is given, so this mode adds no new exposure there.
+		 * The coordinates themselves are browser-supplied in both modes; they are tied to
+		 * the place names the booking shows by verify_place_coordinates(), which the
+		 * search runs before either distance source is consulted.
 		 *
 		 * @return array|false Trip data on success, false when the reading is rejected.
 		 */
@@ -2754,6 +3102,268 @@ if (!class_exists('MPTBM_Function')) {
 				'duration' => $duration,
 				'provider' => 'browser',
 			);
+		}
+
+		/**
+		 * Check that posted coordinates really are the place the posted name describes.
+		 *
+		 * The fare is routed between coordinates the browser sends, but the order, the booking
+		 * and the driver only see the place names sent next to them. Nothing tied the two
+		 * together, so "Downtown -> Airport" could be priced on two points 100 m apart. The
+		 * browser obtains its coordinates by geocoding the name (Google's geocoder, or Photon
+		 * in OpenStreetMap mode), so the server geocodes the same name itself, biased towards
+		 * the posted point, and accepts the pair only when one of the results lies within
+		 * address_match_tolerance() of that point (or the point is inside a result's own area,
+		 * e.g. an airport or a district).
+		 *
+		 * @param string $label  The place name the booking will show.
+		 * @param mixed  $coords Coordinates in any shape normalize_coordinates() accepts.
+		 * @return array{verified: bool, reason: string, provider: string} reason is 'match',
+		 *         'no_match' (geocoded, but nowhere near), 'unavailable' (no geocoder answered),
+		 *         'no_label' or 'no_coords'.
+		 */
+		public static function verify_place_coordinates($label, $coords): array
+		{
+			$label  = trim(sanitize_text_field((string) $label));
+			$coords = self::normalize_coordinates($coords);
+			if ($label === '') {
+				$result = array('verified' => false, 'reason' => 'no_label', 'provider' => '');
+			} elseif (!$coords) {
+				$result = array('verified' => false, 'reason' => 'no_coords', 'provider' => '');
+			} else {
+				$result = self::geocode_place_near($label, $coords);
+			}
+
+			/**
+			 * Lets a site plug in its own geocoder, or override the verdict for a known place.
+			 *
+			 * @param array  $result Keys 'verified' (bool), 'reason', 'provider'.
+			 * @param string $label  Place name.
+			 * @param array  $coords Normalised coordinates (empty when none were posted).
+			 */
+			$result = apply_filters('mptbm_verify_place_coordinates', $result, $label, $coords);
+			return array(
+				'verified' => !empty($result['verified']),
+				'reason'   => isset($result['reason']) ? (string) $result['reason'] : '',
+				'provider' => isset($result['provider']) ? (string) $result['provider'] : '',
+			);
+		}
+
+		/**
+		 * Transient key of a cached mptbm_osm_search (server-side Photon) answer. Shared with
+		 * MPTBM_Dependencies::osm_search_proxy() so the address check can reuse what the
+		 * server itself fetched for the browser moments earlier.
+		 */
+		public static function osm_search_cache_key(array $search_params, $restrict_to_country, $country_code): string
+		{
+			return 'mptbm_osm_' . md5(wp_json_encode(array($search_params, $restrict_to_country, $country_code)));
+		}
+
+		/** How far (metres) a geocoded result may be from the posted point and still count. */
+		public static function address_match_tolerance(): float
+		{
+			return max(100.0, (float) apply_filters('mptbm_address_match_tolerance', 1500));
+		}
+
+		private static function geocode_place_near(string $label, array $coords): array
+		{
+			$cache_key = 'mptbm_addr_' . md5(strtolower($label) . '|' . round($coords['latitude'], 4) . ',' . round($coords['longitude'], 4));
+			$cached = get_transient($cache_key);
+			if (is_array($cached) && isset($cached['verified'], $cached['reason'])) {
+				return $cached;
+			}
+
+			// Ask the geocoder that produced the name: Google in Google map mode (Photon as a
+			// free second opinion), Photon only in OpenStreetMap mode - a Google key left over
+			// from before a switch to OpenStreetMap must not start running up Geocoding bills.
+			// First of all, the answer the server's own Photon proxy gave the browser for this
+			// exact text (typed addresses are geocoded through it), which costs no request at
+			// all - the public Photon instance throttles servers that ask it too often.
+			$google_mode = MP_Global_Function::get_settings('mptbm_map_api_settings', 'display_map', 'openstreetmap') === 'enable';
+			$providers = $google_mode ? array('photon-cache', 'google', 'photon') : array('photon-cache', 'photon');
+			$tolerance = self::address_match_tolerance();
+			$answered = false;
+			foreach ($providers as $provider) {
+				if ($provider === 'photon-cache') {
+					$candidates = self::proxy_cached_candidates($label);
+				} else {
+					$candidates = $provider === 'google' ? self::google_geocode_candidates($label, $coords) : self::photon_geocode_candidates($label, $coords);
+				}
+				if ($candidates === null) {
+					continue;
+				}
+				$answered = $answered || $provider !== 'photon-cache';
+				foreach ($candidates as $candidate) {
+					if (self::point_matches_candidate($coords, $candidate, $tolerance)) {
+						$result = array('verified' => true, 'reason' => 'match', 'provider' => $provider);
+						set_transient($cache_key, $result, WEEK_IN_SECONDS);
+						return $result;
+					}
+				}
+			}
+
+			if (!$answered) {
+				// Not cached: the geocoders may be back on the next search. Recorded so the
+				// admin learns why searches are being refused (MPTBM_Plugin notice).
+				set_transient('mptbm_geocode_failure', array(
+					'type'   => 'unreachable',
+					'reason' => __('No geocoding service could be reached (photon.komoot.io / Google Geocoding).', 'ecab-taxi-booking-manager'),
+					'time'   => time(),
+				), DAY_IN_SECONDS);
+				return array('verified' => false, 'reason' => 'unavailable', 'provider' => '');
+			}
+			$result = array('verified' => false, 'reason' => 'no_match', 'provider' => '');
+			set_transient($cache_key, $result, HOUR_IN_SECONDS);
+			return $result;
+		}
+
+		/**
+		 * A match is the result's own point within tolerance, or - for a result that covers an
+		 * area (airport, district, park) - the posted point within tolerance of that area. Very
+		 * large areas (a state, a country) are ignored: a name that vague says nothing about
+		 * where the car has to go.
+		 */
+		private static function point_matches_candidate(array $coords, array $candidate, float $tolerance): bool
+		{
+			$lat = $coords['latitude'];
+			$lng = $coords['longitude'];
+			if (self::haversine_distance($lat, $lng, $candidate['lat'], $candidate['lng']) * 1000 <= $tolerance) {
+				return true;
+			}
+			if (empty($candidate['bbox'])) {
+				return false;
+			}
+			list($south, $west, $north, $east) = $candidate['bbox'];
+			if ($south > $north || $west > $east || self::haversine_distance($south, $west, $north, $east) > 60) {
+				return false;
+			}
+			$nearest_lat = min(max($lat, $south), $north);
+			$nearest_lng = min(max($lng, $west), $east);
+			return self::haversine_distance($lat, $lng, $nearest_lat, $nearest_lng) * 1000 <= $tolerance;
+		}
+
+		/**
+		 * Photon (OpenStreetMap) results for $label, ranked towards $coords.
+		 *
+		 * @return array|null Candidates [['lat','lng','bbox'=>[s,w,n,e]|null], ...], or null
+		 *                    when Photon could not be reached / gave no usable answer.
+		 */
+		private static function photon_geocode_candidates(string $label, array $coords)
+		{
+			$url = 'https://photon.komoot.io/api/?' . http_build_query(array(
+				'q'     => $label,
+				'lat'   => $coords['latitude'],
+				'lon'   => $coords['longitude'],
+				'limit' => 10,
+				'lang'  => 'en',
+			));
+			$response = wp_remote_get($url, array('timeout' => 8, 'headers' => array('Accept' => 'application/json')));
+			if (is_wp_error($response) || (int) wp_remote_retrieve_response_code($response) !== 200) {
+				return null;
+			}
+			$data = json_decode(wp_remote_retrieve_body($response), true);
+			if (!is_array($data) || !isset($data['features']) || !is_array($data['features'])) {
+				return null;
+			}
+			$candidates = array();
+			foreach ($data['features'] as $feature) {
+				$point = $feature['geometry']['coordinates'] ?? null;
+				if (!is_array($point) || !isset($point[0], $point[1]) || !is_numeric($point[0]) || !is_numeric($point[1])) {
+					continue;
+				}
+				// Photon's extent is [west, north, east, south].
+				$extent = $feature['properties']['extent'] ?? null;
+				$bbox = is_array($extent) && count($extent) === 4 && count(array_filter($extent, 'is_numeric')) === 4
+					? array((float) min($extent[1], $extent[3]), (float) $extent[0], (float) max($extent[1], $extent[3]), (float) $extent[2])
+					: null;
+				$candidates[] = array('lat' => (float) $point[1], 'lng' => (float) $point[0], 'bbox' => $bbox);
+			}
+			$failure = get_transient('mptbm_geocode_failure');
+			if (is_array($failure) && ($failure['type'] ?? '') === 'unreachable') {
+				delete_transient('mptbm_geocode_failure');
+			}
+			return $candidates;
+		}
+
+		/**
+		 * What mptbm_osm_search fetched from Photon for exactly this text, if still cached.
+		 * Only the server writes that cache, so it is as trustworthy as a fresh request.
+		 *
+		 * @return array|null Candidates (no areas), or null when nothing is cached.
+		 */
+		private static function proxy_cached_candidates(string $label)
+		{
+			$key = self::osm_search_cache_key(
+				array('q' => $label, 'limit' => 5, 'lang' => 'en'),
+				MP_Global_Function::get_settings('mptbm_map_api_settings', 'mp_country_restriction', 'no'),
+				MP_Global_Function::get_settings('mptbm_map_api_settings', 'mp_country', 'BD')
+			);
+			$cached = get_transient($key);
+			if (!is_array($cached)) {
+				return null;
+			}
+			$candidates = array();
+			foreach ($cached as $row) {
+				if (isset($row['lat'], $row['lon']) && is_numeric($row['lat']) && is_numeric($row['lon'])) {
+					$candidates[] = array('lat' => (float) $row['lat'], 'lng' => (float) $row['lon'], 'bbox' => null);
+				}
+			}
+			return $candidates;
+		}
+
+		/**
+		 * Google Geocoding results for $label, biased towards $coords.
+		 *
+		 * @return array|null Candidates as photon_geocode_candidates(), or null when no key is
+		 *                    configured or Google refused/failed the request.
+		 */
+		private static function google_geocode_candidates(string $label, array $coords)
+		{
+			$api_key = self::map_server_api_key();
+			if (!$api_key || get_transient('mptbm_geocode_google_denied')) {
+				return null;
+			}
+			$url = 'https://maps.googleapis.com/maps/api/geocode/json?' . http_build_query(array(
+				'address' => $label,
+				'bounds'  => sprintf('%.6F,%.6F|%.6F,%.6F', $coords['latitude'] - 0.25, $coords['longitude'] - 0.25, $coords['latitude'] + 0.25, $coords['longitude'] + 0.25),
+				'key'     => $api_key,
+			));
+			$response = wp_remote_get($url, array('timeout' => 8));
+			if (is_wp_error($response) || (int) wp_remote_retrieve_response_code($response) !== 200) {
+				return null;
+			}
+			$data = json_decode(wp_remote_retrieve_body($response), true);
+			$status = is_array($data) && isset($data['status']) ? (string) $data['status'] : '';
+			if ($status === 'ZERO_RESULTS') {
+				return array();
+			}
+			if ($status !== 'OK' || empty($data['results']) || !is_array($data['results'])) {
+				if (in_array($status, array('REQUEST_DENIED', 'OVER_DAILY_LIMIT'), true)) {
+					// Typically a referrer-restricted key, or a key without the Geocoding API.
+					// Stop asking for an hour, and tell the admin (MPTBM_Plugin notice).
+					set_transient('mptbm_geocode_google_denied', 1, HOUR_IN_SECONDS);
+					set_transient('mptbm_geocode_failure', array(
+						'type'   => 'google_denied',
+						'reason' => trim($status . ' ' . ($data['error_message'] ?? '')),
+						'time'   => time(),
+					), DAY_IN_SECONDS);
+				}
+				return null;
+			}
+			delete_transient('mptbm_geocode_failure');
+			$candidates = array();
+			foreach ($data['results'] as $result) {
+				$location = $result['geometry']['location'] ?? null;
+				if (!isset($location['lat'], $location['lng']) || !is_numeric($location['lat']) || !is_numeric($location['lng'])) {
+					continue;
+				}
+				$box = $result['geometry']['bounds'] ?? ($result['geometry']['viewport'] ?? null);
+				$bbox = isset($box['southwest']['lat'], $box['southwest']['lng'], $box['northeast']['lat'], $box['northeast']['lng'])
+					? array((float) $box['southwest']['lat'], (float) $box['southwest']['lng'], (float) $box['northeast']['lat'], (float) $box['northeast']['lng'])
+					: null;
+				$candidates[] = array('lat' => (float) $location['lat'], 'lng' => (float) $location['lng'], 'bbox' => $bbox);
+			}
+			return $candidates;
 		}
 
 		// Helper to calculate distance server-side
