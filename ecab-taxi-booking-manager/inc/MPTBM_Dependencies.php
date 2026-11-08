@@ -53,6 +53,15 @@ if (!class_exists('MPTBM_Dependencies')) {
 			require_once MPTBM_PLUGIN_DIR . '/inc/MPTBM_Query.php';
 			require_once MPTBM_PLUGIN_DIR . '/inc/MPTBM_Layout.php';
 			require_once MPTBM_PLUGIN_DIR . '/inc/MPTBM_Rest_Api.php';
+			require_once MPTBM_PLUGIN_DIR . '/inc/MPTBM_App_Form.php';
+			require_once MPTBM_PLUGIN_DIR . '/inc/MPTBM_App_Quote.php';
+			require_once MPTBM_PLUGIN_DIR . '/inc/MPTBM_App_Places.php';
+			require_once MPTBM_PLUGIN_DIR . '/inc/MPTBM_Pickup_Code.php';
+			require_once MPTBM_PLUGIN_DIR . '/inc/MPTBM_App_Booking.php';
+			require_once MPTBM_PLUGIN_DIR . '/inc/MPTBM_App_Push.php';
+			require_once MPTBM_PLUGIN_DIR . '/inc/MPTBM_App_Push_Broadcast.php';
+			require_once MPTBM_PLUGIN_DIR . '/inc/MPTBM_App_Contact.php';
+			require_once MPTBM_PLUGIN_DIR . '/inc/MPTBM_App_Api.php';
 			// Post types must be registered on frontend, REST and cron requests too.
 			require_once MPTBM_PLUGIN_DIR . '/Admin/MPTBM_CPT.php';
 			// Hidden WooCommerce product mirror is only relevant when WooCommerce is active.

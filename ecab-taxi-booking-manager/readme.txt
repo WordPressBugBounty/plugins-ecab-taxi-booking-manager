@@ -219,6 +219,79 @@ Appneck SDK **does not gather any data by default.** The SDK only starts gatheri
 Learn more about how [Appneck collects and uses this data](https://appneck.com/privacy-policy/).
 
 == Changelog ==
+= 2.2.9 - 2026-11-08 =
+* New: Add customer-facing app API (ecab-app/v1) for the mobile app.
+* New: Route quote for the mobile app (POST /ecab-app/v1/quote).
+* New: Place search and reverse lookup for the mobile app.
+* New: Bookings for the mobile app (checkout form, extras, create, list, pay link).
+* New: Cancel and change requests, driver info (Pro).
+* New: Push notifications for the mobile app.
+* New: Fixed-route and manual (listed-location) trips.
+* New: Receipt link (Pro PDF) and brand colour; "Mobile App" settings.
+* New: The search form follows the website's booking form (tabs and fields).
+* New: App logo setting (Mobile App settings) and brand.logo in /config.
+* New: Pickup schedule per tab and a route readout.
+* Improvement: Remove a stray file that was added by mistake (Admin/MPTBM Quick Setup.php is not part of the plugin).
+* Improvement: Hourly bookings must cover the drive: minimum hours from the route time.
+* Improvement: App API: /route returns the road shape (encoded polyline) for the map.
+* Improvement: App API: billing address, delete account, support email.
+* Improvement: App API: orders keep the trip's pick-up/drop-off points for the My Trips map.
+* Improvement: App API: quote carries the pricing add-on labels shown on the website card (tier, peak hour).
+* Improvement: App API: bookings carry receipt data so the app draws the PDF ticket and thermal receipt (Pro).
+* Improvement: App API: profile photo (POST/DELETE /me/avatar), returned on the profile.
+* Improvement: App API: admin-written push notifications with image (App Notifications screen).
+* Improvement: App settings: Google Maps key for the app (OpenStreetMap when empty), support email and phone.
+* Improvement: App API: map follows Map API Settings (Google/OSM/TomTom/off); app config never cached; drop separate app Google key.
+* Improvement: Mobile App settings: app logo picker saved the image ID as http://<id>; save it as an ID and repair old values.
+* Improvement: App API: pay with another method from the app; payment link survives a reload; no-cache on the pay redirect.
+* Improvement: App API: booking carries payment method id.
+* Improvement: App API: rate limits per signed-in customer and real visitor IP behind Cloudflare.
+* Improvement: App payment link: open it after WooCommerce registers order types (links were always 'expired').
+* Improvement: App payments: return to the app after payment (app-chosen return address, order-received hands back to the app).
+* Improvement: App API: expose the instance so add-ons can reuse the app sign-in check.
+* Improvement: App API: ride status in the booking payload; MPTBM App Push::notify for add-ons (2.2.7).
+* Improvement: Pickup code: a 6-digit code for every new booking (2.2.8).
+* Improvement: Booking: only a vehicle the search offers, at a real fare.
+* Improvement: Tests/app-booking: clear the per-customer rate limits too.
+* Fix: Quote counted the geo-fence surcharge twice.
+* Fix: Booking failed with "accept the terms" on shops without a terms page.
+* Fix: Booking refused with "pricing mode changed" - isolate each quote and booking session.
+
+= 2.2.8 - 2026-11-05 =
+* Added: pickup code. Every new booking gets a 6-digit code that the passenger sees in the mobile app (also as a QR code), on the order page and in the order email, so the driver can confirm who they are picking up.
+
+= 2.2.7 - 2026-11-05 =
+* Added: the mobile app is told where the ride is (on the way, picked up, completed) so passengers get a sound and a message the moment the driver starts or finishes their ride; add-ons can send push notifications to a user's phones.
+
+= 2.2.6 - 2026-11-04 =
+* Added: the mobile app API can be extended by add-ons (the E-cab Pro driver app reuses the app's sign-in).
+
+= 2.2.5 - 2026-11-04 =
+* Added: mobile app payments stay inside the app. The app opens the payment page in a secure in-app sheet and names its own address to return to; when the payment is done the shop's "order received" page sends the customer straight back into the app instead of showing the shop's thank-you page.
+
+= 2.2.4 - 2026-11-04 =
+* Fixed: paying for a booking from the mobile app - the payment link was reported as expired the moment it was opened, because it was checked before WooCommerce had finished loading its orders. Customers can now reach the payment page.
+
+= 2.2.3 - 2026-11-04 =
+* Fixed: the mobile app could answer "Too many requests" to customers who were not making many requests. The app's request limits are now counted per signed-in customer, and per real visitor address (not Cloudflare's) for signed-out requests, instead of one count shared by everyone behind the same address.
+
+= 2.2.2 - 2026-11-04 =
+* Added: in the mobile app an unpaid booking can be paid with a different payment method (the app asks for a new payment link with the chosen method; cash-type methods are set up straight away).
+* Fixed: the mobile app's payment link no longer reports "expired" when its page is reloaded within a minute (a web view reloads when a bot check or a slow page interrupts it).
+
+= 2.2.1 - 2026-11-04 =
+* Fixed: the App logo picker in Settings > Mobile App showed a broken image after saving; the chosen logo now saves and shows correctly (a logo already saved this way is repaired automatically).
+
+= 2.2.0 - 2026-11-04 =
+* Changed: the mobile app's map now follows Map API Settings exactly - Google Maps with the same Google key as the website, OpenStreetMap, or no map. When the site routes with TomTom, the app draws the road TomTom found (the TomTom key stays on the server). The separate Google Maps key under Settings > Mobile App is removed.
+* Fixed: changes to Settings > Mobile App (for example Trip types in the app) reached the app late because a page cache kept an old copy of the app's settings; the app now always gets the current settings.
+
+= 2.1.9 - 2026-11-03 =
+* Added: Settings > Mobile App now has a Google Maps API key for the app (optional - leave it empty and the app shows an OpenStreetMap map, which needs no key), a Support email and a Support phone number. Passengers see the support contacts in the app (a Call and an Email button on their trip, and in the app's menu) so they can reach your company directly in an emergency.
+
+= 2.1.8 - 2026-11-03 =
+* Added: App Notifications - a new screen under the taxi menu where an admin can write a push notification (title, message and an optional image) and send it to every customer who uses the mobile app, or as a test to their own account. Recent notifications are listed with how many devices they reached; large audiences are sent in the background.
+
 = 2.1.6 - 2026-10-14 =
 * Added: Operation Areas > a Single Operation Area can now have a "Minimum Price" set directly on it. For any vehicle that has that Operation Area selected on its own Price Settings, a trip picking up or dropping off inside it is automatically charged at least that amount - previously a minimum fare could only be set per vehicle, with no way to tie it to a specific area.
 * Fixed: A Fixed Route (`price_based='fixed_route'`) whose name contained a dash (e.g. "City A - City B") could show "No Transport Available" for every vehicle, and its stops would never preview on the map - WordPress's own title formatting turns " - " into a different dash character behind the scenes, which only matched correctly in some of the places that route name was compared against, not all of them. Those comparisons are now kept consistent, so a dash (or similar punctuation) in a route's name no longer breaks it.

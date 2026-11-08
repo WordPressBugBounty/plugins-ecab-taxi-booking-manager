@@ -1,0 +1,1128 @@
+<?php
+/*
+ * Customer-facing REST API used by the E-cab mobile app (namespace ecab-app/v1).
+ *
+ * The existing ecab-taxi/v1 API (MPTBM_Rest_Api.php) is key + secret based and meant for
+ * server-to-server integrations, so it cannot be shipped inside an app installed on
+ * customers' phones. This API is for the customers themselves:
+ *   - GET  /config            site bootstrap: currency, map, booking mode, payment methods
+ *                             and which Pro/addon features exist (the app hides what is missing)
+ *   - GET  /vehicles[/{id}]   published vehicles
+ *   - GET  /locations         fixed-route pick-up / drop-off lists (manual pricing)
+ *   - POST /auth/register|login|refresh|logout|forgot, GET|PUT /me
+ *
+ * Auth is a stateless HMAC-signed access token plus a rotating opaque refresh token. Every
+ * token is revoked at once by bumping the user's token version (logout, password change).
+ */
+if (!defined('ABSPATH')) {
+	die;
+} // Cannot access pages directly.
+
+if (!class_exists('MPTBM_App_Api')) {
+	class MPTBM_App_Api {
+		const API_VERSION = 1;
+		const NAMESPACE_ID = 'ecab-app/v1';
+		const ACCESS_TTL = DAY_IN_SECONDS;
+		const REFRESH_TTL = 30 * DAY_IN_SECONDS;
+		const MAX_REFRESH_TOKENS = 5;
+		const META_VERSION = 'mptbm_app_token_ver';
+		const META_REFRESH = 'mptbm_app_refresh_tokens';
+
+		/** @var MPTBM_App_Api|null The one instance, so add-ons (the Pro driver app API) can reuse the app's sign-in check. */
+		private static $instance = null;
+
+		public function __construct() {
+			self::$instance = $this;
+			add_action('rest_api_init', array($this, 'register_routes'));
+		}
+
+		public static function instance(): ?MPTBM_App_Api {
+			return self::$instance;
+		}
+
+		public static function is_enabled(): bool {
+			$enabled = MP_Global_Function::get_settings('mptbm_app_settings', 'enable_app_api', 'yes') !== 'no';
+			return (bool) apply_filters('mptbm_app_api_enabled', $enabled);
+		}
+
+		public function register_routes() {
+			if (!self::is_enabled()) {
+				return;
+			}
+			$public = array($this, 'permission_public');
+			$auth = array($this, 'permission_customer');
+
+			register_rest_route(self::NAMESPACE_ID, '/config', array('methods' => 'GET', 'callback' => array($this, 'get_config'), 'permission_callback' => $public));
+
+			register_rest_route(self::NAMESPACE_ID, '/vehicles', array(
+				'methods' => 'GET',
+				'callback' => array($this, 'get_vehicles'),
+				'permission_callback' => $public,
+				'args' => array(
+					'page' => array('type' => 'integer', 'default' => 1, 'minimum' => 1),
+					'per_page' => array('type' => 'integer', 'default' => 20, 'minimum' => 1, 'maximum' => 50),
+					'passengers' => array('type' => 'integer', 'minimum' => 1),
+				),
+			));
+			register_rest_route(self::NAMESPACE_ID, '/vehicles/(?P<id>\d+)', array('methods' => 'GET', 'callback' => array($this, 'get_vehicle'), 'permission_callback' => $public));
+			register_rest_route(self::NAMESPACE_ID, '/locations', array(
+				'methods' => 'GET',
+				'callback' => array($this, 'get_locations'),
+				'permission_callback' => $public,
+				'args' => array(
+					'start' => array('type' => 'string'),
+					'price_based' => array('type' => 'string', 'default' => 'manual', 'enum' => array('manual', 'fixed_route', 'fixed_zone', 'fixed_zone_dropoff')),
+				),
+			));
+
+			register_rest_route(self::NAMESPACE_ID, '/quote', array(
+				'methods' => 'POST',
+				'callback' => array($this, 'get_quote'),
+				'permission_callback' => array($this, 'permission_quote'),
+			));
+
+			register_rest_route(self::NAMESPACE_ID, '/vehicles/(?P<id>\d+)/extras', array('methods' => 'GET', 'callback' => array($this, 'get_extras'), 'permission_callback' => $public));
+			register_rest_route(self::NAMESPACE_ID, '/checkout/form', array('methods' => 'GET', 'callback' => array($this, 'get_checkout_form'), 'permission_callback' => array($this, 'permission_optional_customer')));
+			register_rest_route(self::NAMESPACE_ID, '/checkout/states', array(
+				'methods' => 'GET',
+				'callback' => array($this, 'get_states'),
+				'permission_callback' => $public,
+				'args' => array('country' => array('type' => 'string', 'required' => true)),
+			));
+			register_rest_route(self::NAMESPACE_ID, '/bookings', array(
+				array('methods' => 'GET', 'callback' => array($this, 'list_bookings'), 'permission_callback' => $auth),
+				array('methods' => 'POST', 'callback' => array($this, 'create_booking'), 'permission_callback' => array($this, 'permission_booking')),
+			));
+			register_rest_route(self::NAMESPACE_ID, '/bookings/(?P<id>\d+)', array('methods' => 'GET', 'callback' => array($this, 'get_booking'), 'permission_callback' => $auth));
+			register_rest_route(self::NAMESPACE_ID, '/bookings/(?P<id>\d+)/cancel', array('methods' => 'POST', 'callback' => array($this, 'cancel_booking'), 'permission_callback' => array($this, 'permission_booking')));
+			register_rest_route(self::NAMESPACE_ID, '/bookings/(?P<id>\d+)/change', array(
+				'methods' => 'POST',
+				'callback' => array($this, 'change_booking'),
+				'permission_callback' => array($this, 'permission_booking'),
+				'args' => array('text' => array('type' => 'string', 'required' => true)),
+			));
+			register_rest_route(self::NAMESPACE_ID, '/bookings/(?P<id>\d+)/pay-link', array('methods' => 'POST', 'callback' => array($this, 'get_pay_link'), 'permission_callback' => array($this, 'permission_booking'), 'args' => array('method' => array('type' => 'string', 'default' => ''), 'return_url' => array('type' => 'string', 'default' => ''))));
+
+			register_rest_route(self::NAMESPACE_ID, '/push/register', array(
+				array('methods' => 'POST', 'callback' => array($this, 'push_register'), 'permission_callback' => $auth, 'args' => array('token' => array('type' => 'string', 'required' => true))),
+				array('methods' => 'DELETE', 'callback' => array($this, 'push_unregister'), 'permission_callback' => $auth, 'args' => array('token' => array('type' => 'string', 'required' => true))),
+			));
+
+			register_rest_route(self::NAMESPACE_ID, '/route', array(
+				'methods' => 'POST',
+				'callback' => array($this, 'get_route'),
+				'permission_callback' => array($this, 'permission_places'),
+			));
+			register_rest_route(self::NAMESPACE_ID, '/places/search', array(
+				'methods' => 'GET',
+				'callback' => array($this, 'search_places'),
+				'permission_callback' => array($this, 'permission_places'),
+				'args' => array(
+					'q' => array('type' => 'string', 'required' => true),
+					'lat' => array('type' => 'number', 'minimum' => -90, 'maximum' => 90),
+					'lng' => array('type' => 'number', 'minimum' => -180, 'maximum' => 180),
+				),
+			));
+			register_rest_route(self::NAMESPACE_ID, '/places/reverse', array(
+				'methods' => 'GET',
+				'callback' => array($this, 'reverse_place'),
+				'permission_callback' => array($this, 'permission_places'),
+				'args' => array(
+					'lat' => array('type' => 'number', 'required' => true, 'minimum' => -90, 'maximum' => 90),
+					'lng' => array('type' => 'number', 'required' => true, 'minimum' => -180, 'maximum' => 180),
+				),
+			));
+
+			register_rest_route(self::NAMESPACE_ID, '/auth/register', array(
+				'methods' => 'POST',
+				'callback' => array($this, 'register_customer'),
+				'permission_callback' => $public,
+				'args' => array(
+					'email' => array('type' => 'string', 'required' => true),
+					'password' => array('type' => 'string', 'required' => true),
+					'first_name' => array('type' => 'string', 'required' => true),
+					'last_name' => array('type' => 'string'),
+					'phone' => array('type' => 'string'),
+				),
+			));
+			register_rest_route(self::NAMESPACE_ID, '/auth/login', array(
+				'methods' => 'POST',
+				'callback' => array($this, 'login'),
+				'permission_callback' => $public,
+				'args' => array(
+					'username' => array('type' => 'string', 'required' => true),
+					'password' => array('type' => 'string', 'required' => true),
+				),
+			));
+			register_rest_route(self::NAMESPACE_ID, '/auth/refresh', array(
+				'methods' => 'POST',
+				'callback' => array($this, 'refresh'),
+				'permission_callback' => $public,
+				'args' => array('refresh_token' => array('type' => 'string', 'required' => true)),
+			));
+			register_rest_route(self::NAMESPACE_ID, '/auth/logout', array('methods' => 'POST', 'callback' => array($this, 'logout'), 'permission_callback' => $auth));
+			register_rest_route(self::NAMESPACE_ID, '/auth/forgot', array(
+				'methods' => 'POST',
+				'callback' => array($this, 'forgot_password'),
+				'permission_callback' => $public,
+				'args' => array('email' => array('type' => 'string', 'required' => true)),
+			));
+
+			register_rest_route(self::NAMESPACE_ID, '/me', array(
+				array('methods' => 'GET', 'callback' => array($this, 'get_me'), 'permission_callback' => $auth),
+				array('methods' => 'PUT', 'callback' => array($this, 'update_me'), 'permission_callback' => $auth),
+			));
+			register_rest_route(self::NAMESPACE_ID, '/me/avatar', array(
+				array('methods' => 'POST', 'callback' => array($this, 'set_avatar'), 'permission_callback' => $auth, 'args' => array('image' => array('type' => 'string', 'required' => true))),
+				array('methods' => 'DELETE', 'callback' => array($this, 'remove_avatar'), 'permission_callback' => $auth),
+			));
+			// Deleting an account is a POST with the password (a DELETE body is unreliable on many hosts).
+			register_rest_route(self::NAMESPACE_ID, '/me/delete', array(
+				'methods' => 'POST',
+				'callback' => array($this, 'delete_me'),
+				'permission_callback' => $auth,
+				'args' => array('current_password' => array('type' => 'string', 'required' => true)),
+			));
+		}
+
+		/* ------------------------------------------------------------------ permissions */
+
+		public function permission_public($request) {
+			return $this->rate_limit('public', 120, MINUTE_IN_SECONDS);
+		}
+
+		/** A quote geocodes and routes on the server, so it gets a tighter budget than plain reads. */
+		public function permission_quote($request) {
+			return $this->rate_limit('quote', 30, MINUTE_IN_SECONDS);
+		}
+
+		/** Typing fires many searches; cached answers are free, the budget guards outbound lookups. */
+		public function permission_places($request) {
+			return $this->rate_limit('places', 90, MINUTE_IN_SECONDS);
+		}
+
+		/** Placing a booking creates an order, so it gets the tightest budget. */
+		public function permission_booking($request) {
+			$allowed = $this->permission_customer($request);
+			return is_wp_error($allowed) ? $allowed : $this->rate_limit('booking', 20, MINUTE_IN_SECONDS, (string) get_current_user_id());
+		}
+
+		/** Signed in is optional (it only fills the form in); a token that is present must still be valid. */
+		public function permission_optional_customer($request) {
+			return '' === $this->bearer_token($request) ? $this->permission_public($request) : $this->permission_customer($request);
+		}
+
+		public function permission_customer($request) {
+			$user_id = $this->authenticate($request);
+			if (is_wp_error($user_id)) {
+				// No valid sign-in: count it against the caller's address so guessing tokens is not free.
+				$limited = $this->rate_limit('auth', 120, MINUTE_IN_SECONDS);
+				return is_wp_error($limited) ? $limited : $user_id;
+			}
+			// A signed-in customer is counted as themselves, not by address: behind a CDN or a shared Wi-Fi many customers have one.
+			$limited = $this->rate_limit('auth_user', 240, MINUTE_IN_SECONDS, (string) $user_id);
+			if (is_wp_error($limited)) {
+				return $limited;
+			}
+			wp_set_current_user($user_id);
+			return true;
+		}
+
+		/** Fixed-window counter per client (the signed-in user when given, else the visitor's address) and bucket. */
+		private function rate_limit(string $bucket, int $max, int $window, string $who = '') {
+			$who = '' !== $who ? 'u' . $who : self::client_ip();
+			$key = 'mptbm_app_rl_' . md5($bucket . '|' . $who);
+			$count = (int) get_transient($key);
+			if ($count >= $max) {
+				return new WP_Error('mptbm_app_rate_limited', esc_html__('Too many requests. Please try again shortly.', 'ecab-taxi-booking-manager'), array('status' => 429));
+			}
+			set_transient($key, $count + 1, $window);
+			return true;
+		}
+
+		/** The visitor's address. Behind Cloudflare the connection comes from Cloudflare, so its real-visitor header is used, but only when the connection really is Cloudflare's. */
+		private static function client_ip(): string {
+			$remote = isset($_SERVER['REMOTE_ADDR']) ? sanitize_text_field(wp_unslash($_SERVER['REMOTE_ADDR'])) : '';
+			$cf = isset($_SERVER['HTTP_CF_CONNECTING_IP']) ? sanitize_text_field(wp_unslash($_SERVER['HTTP_CF_CONNECTING_IP'])) : '';
+			if ('' !== $cf && false !== filter_var($cf, FILTER_VALIDATE_IP) && self::is_cloudflare($remote)) {
+				return $cf;
+			}
+			return $remote;
+		}
+
+		private static function is_cloudflare(string $ip): bool {
+			$binary = @inet_pton($ip);
+			if (false === $binary) {
+				return false;
+			}
+			$ranges = array(
+				'173.245.48.0/20', '103.21.244.0/22', '103.22.200.0/22', '103.31.4.0/22', '141.101.64.0/18', '108.162.192.0/18', '190.93.240.0/20',
+				'188.114.96.0/20', '197.234.240.0/22', '198.41.128.0/17', '162.158.0.0/15', '104.16.0.0/13', '104.24.0.0/14', '172.64.0.0/13', '131.0.72.0/22',
+				'2400:cb00::/32', '2606:4700::/32', '2803:f800::/32', '2405:b500::/32', '2405:8100::/32', '2a06:98c0::/29', '2c0f:f248::/32',
+			);
+			foreach ($ranges as $range) {
+				list($base, $bits) = explode('/', $range);
+				$base_bin = inet_pton($base);
+				if (strlen($base_bin) !== strlen($binary)) {
+					continue;
+				}
+				$bits = (int) $bits;
+				$bytes = intdiv($bits, 8);
+				if (substr($binary, 0, $bytes) !== substr($base_bin, 0, $bytes)) {
+					continue;
+				}
+				$rest = $bits % 8;
+				if (0 === $rest || (ord($binary[$bytes]) & (0xff << (8 - $rest)) & 0xff) === (ord($base_bin[$bytes]) & (0xff << (8 - $rest)) & 0xff)) {
+					return true;
+				}
+			}
+			return false;
+		}
+
+		/* ----------------------------------------------------------------------- tokens */
+
+		private function b64url_encode(string $data): string {
+			return rtrim(strtr(base64_encode($data), '+/', '-_'), '=');
+		}
+
+		private function b64url_decode(string $data) {
+			return base64_decode(strtr($data, '-_', '+/'), true);
+		}
+
+		private function sign(string $payload): string {
+			return $this->b64url_encode(hash_hmac('sha256', $payload, wp_salt('auth'), true));
+		}
+
+		private function token_version(int $user_id): int {
+			return (int) get_user_meta($user_id, self::META_VERSION, true);
+		}
+
+		private function issue_access_token(int $user_id): string {
+			$payload = $this->b64url_encode(wp_json_encode(array(
+				'uid' => $user_id,
+				'exp' => time() + self::ACCESS_TTL,
+				'ver' => $this->token_version($user_id),
+			)));
+			return $payload . '.' . $this->sign($payload);
+		}
+
+		private function bearer_token($request): string {
+			$header = (string) $request->get_header('authorization');
+			if ('' === $header && isset($_SERVER['REDIRECT_HTTP_AUTHORIZATION'])) {
+				$header = sanitize_text_field(wp_unslash($_SERVER['REDIRECT_HTTP_AUTHORIZATION']));
+			}
+			if ('' === $header) {
+				// Some hosts strip Authorization before PHP sees it.
+				$header = 'Bearer ' . (string) $request->get_header('x-ecab-token');
+			}
+			return preg_match('/^Bearer\s+(\S+)$/i', $header, $m) ? $m[1] : '';
+		}
+
+		/** @return int|WP_Error user id */
+		private function authenticate($request) {
+			$error = new WP_Error('mptbm_app_unauthorized', esc_html__('Please log in again.', 'ecab-taxi-booking-manager'), array('status' => 401));
+			$token = $this->bearer_token($request);
+			$parts = explode('.', $token);
+			if (2 !== count($parts) || !hash_equals($this->sign($parts[0]), $parts[1])) {
+				return $error;
+			}
+			$raw = $this->b64url_decode($parts[0]);
+			$data = $raw ? json_decode($raw, true) : null;
+			if (!is_array($data) || empty($data['uid']) || empty($data['exp']) || (int) $data['exp'] < time()) {
+				return $error;
+			}
+			$user_id = (int) $data['uid'];
+			if (!get_userdata($user_id) || (int) ($data['ver'] ?? -1) !== $this->token_version($user_id)) {
+				return $error;
+			}
+			return $user_id;
+		}
+
+		private function issue_refresh_token(int $user_id): string {
+			$token = $user_id . '.' . wp_generate_password(48, false, false);
+			$stored = get_user_meta($user_id, self::META_REFRESH, true);
+			$stored = is_array($stored) ? $stored : array();
+			$now = time();
+			$stored = array_filter($stored, static function ($expires) use ($now) {
+				return (int) $expires > $now;
+			});
+			$stored[hash('sha256', $token)] = $now + self::REFRESH_TTL;
+			arsort($stored); // newest expiry first, keep only the most recent devices
+			update_user_meta($user_id, self::META_REFRESH, array_slice($stored, 0, self::MAX_REFRESH_TOKENS, true));
+			return $token;
+		}
+
+		private function token_response(int $user_id): array {
+			return array(
+				'access_token' => $this->issue_access_token($user_id),
+				'expires_in' => self::ACCESS_TTL,
+				'refresh_token' => $this->issue_refresh_token($user_id),
+				'user' => $this->prepare_user($user_id),
+			);
+		}
+
+		private function revoke_all_tokens(int $user_id): void {
+			update_user_meta($user_id, self::META_VERSION, $this->token_version($user_id) + 1);
+			delete_user_meta($user_id, self::META_REFRESH);
+		}
+
+		/* ------------------------------------------------------------------------- auth */
+
+		private function auth_error(string $code, string $message, int $status = 400) {
+			return new WP_Error($code, $message, array('status' => $status));
+		}
+
+		public function register_customer($request) {
+			$limited = $this->rate_limit('register', 10, HOUR_IN_SECONDS);
+			if (is_wp_error($limited)) {
+				return $limited;
+			}
+			if (!apply_filters('mptbm_app_allow_registration', true)) {
+				return $this->auth_error('mptbm_app_registration_closed', esc_html__('Registration is closed.', 'ecab-taxi-booking-manager'), 403);
+			}
+			$email = sanitize_email((string) $request->get_param('email'));
+			$password = (string) $request->get_param('password');
+			$first = sanitize_text_field((string) $request->get_param('first_name'));
+			if (!is_email($email)) {
+				return $this->auth_error('mptbm_app_invalid_email', esc_html__('Enter a valid email address.', 'ecab-taxi-booking-manager'));
+			}
+			if (strlen($password) < 8 || strlen($password) > 128) {
+				return $this->auth_error('mptbm_app_weak_password', esc_html__('Password must be 8 to 128 characters.', 'ecab-taxi-booking-manager'));
+			}
+			if ('' === $first) {
+				return $this->auth_error('mptbm_app_missing_name', esc_html__('First name is required.', 'ecab-taxi-booking-manager'));
+			}
+			if (email_exists($email)) {
+				return $this->auth_error('mptbm_app_email_exists', esc_html__('An account with this email already exists. Please log in.', 'ecab-taxi-booking-manager'), 409);
+			}
+
+			if (function_exists('wc_create_new_customer')) {
+				$user_id = wc_create_new_customer($email, '', $password);
+			} else {
+				$user_id = wp_create_user(sanitize_user(current(explode('@', $email)), true) . wp_rand(100, 999), $password, $email);
+			}
+			if (is_wp_error($user_id)) {
+				return $this->auth_error('mptbm_app_register_failed', $user_id->get_error_message());
+			}
+			wp_update_user(array(
+				'ID' => $user_id,
+				'first_name' => $first,
+				'last_name' => sanitize_text_field((string) $request->get_param('last_name')),
+				'display_name' => trim($first . ' ' . sanitize_text_field((string) $request->get_param('last_name'))),
+			));
+			update_user_meta($user_id, 'billing_first_name', $first);
+			update_user_meta($user_id, 'billing_last_name', sanitize_text_field((string) $request->get_param('last_name')));
+			update_user_meta($user_id, 'billing_email', $email);
+			update_user_meta($user_id, 'billing_phone', sanitize_text_field((string) $request->get_param('phone')));
+
+			return new WP_REST_Response($this->token_response((int) $user_id), 201);
+		}
+
+		public function login($request) {
+			$username = sanitize_text_field((string) $request->get_param('username'));
+			$password = (string) $request->get_param('password');
+			// Throttle guesses per client and per account, then answer every failure identically.
+			$limited = $this->rate_limit('login', 10, 15 * MINUTE_IN_SECONDS);
+			if (is_wp_error($limited)) {
+				return $limited;
+			}
+			$user = wp_authenticate($username, $password);
+			if (is_wp_error($user)) {
+				return $this->auth_error('mptbm_app_bad_login', esc_html__('Incorrect email or password.', 'ecab-taxi-booking-manager'), 401);
+			}
+			return new WP_REST_Response($this->token_response((int) $user->ID), 200);
+		}
+
+		public function refresh($request) {
+			$limited = $this->rate_limit('refresh', 30, 15 * MINUTE_IN_SECONDS);
+			if (is_wp_error($limited)) {
+				return $limited;
+			}
+			$token = (string) $request->get_param('refresh_token');
+			$hash = hash('sha256', $token);
+			$user_id = (int) strtok($token, '.'); // refresh tokens are "<user id>.<random>"
+			$stored = $user_id ? get_user_meta($user_id, self::META_REFRESH, true) : array();
+			if (is_array($stored) && isset($stored[$hash]) && (int) $stored[$hash] > time()) {
+				unset($stored[$hash]); // rotate: a refresh token works once
+				update_user_meta($user_id, self::META_REFRESH, $stored);
+				return new WP_REST_Response($this->token_response($user_id), 200);
+			}
+			return $this->auth_error('mptbm_app_bad_refresh', esc_html__('Session expired. Please log in again.', 'ecab-taxi-booking-manager'), 401);
+		}
+
+		public function logout($request) {
+			$this->revoke_all_tokens(get_current_user_id());
+			return new WP_REST_Response(array('success' => true), 200);
+		}
+
+		public function forgot_password($request) {
+			$limited = $this->rate_limit('forgot', 5, HOUR_IN_SECONDS);
+			if (is_wp_error($limited)) {
+				return $limited;
+			}
+			$email = sanitize_email((string) $request->get_param('email'));
+			if (is_email($email) && email_exists($email)) {
+				retrieve_password($email);
+			}
+			// Same answer whether or not the account exists.
+			return new WP_REST_Response(array('success' => true, 'message' => esc_html__('If an account exists for this email, a reset link has been sent.', 'ecab-taxi-booking-manager')), 200);
+		}
+
+		/* --------------------------------------------------------------------------- me */
+
+		private function prepare_user(int $user_id): array {
+			$user = get_userdata($user_id);
+			return array(
+				'id' => $user_id,
+				'email' => $user->user_email,
+				'first_name' => (string) get_user_meta($user_id, 'first_name', true),
+				'last_name' => (string) get_user_meta($user_id, 'last_name', true),
+				'phone' => (string) get_user_meta($user_id, 'billing_phone', true),
+				'avatar' => $this->avatar_url($user_id),
+				// One line for the account screen; the full address is edited through the checkout's own billing fields.
+				'address' => implode(', ', array_filter(array_map(static function ($key) use ($user_id) {
+					return trim((string) get_user_meta($user_id, $key, true));
+				}, array('billing_address_1', 'billing_city', 'billing_postcode')))),
+			);
+		}
+
+		private const AVATAR_META = 'mptbm_app_avatar';
+
+		private function avatar_url(int $user_id): string {
+			$id = (int) get_user_meta($user_id, self::AVATAR_META, true);
+			$url = $id ? wp_get_attachment_image_url($id, 'medium') : '';
+			return $url ? (string) $url : '';
+		}
+
+		private function drop_avatar(int $user_id): void {
+			$old = (int) get_user_meta($user_id, self::AVATAR_META, true);
+			if ($old && 'attachment' === get_post_type($old) && (int) get_post_field('post_author', $old) === $user_id) {
+				wp_delete_attachment($old, true);
+			}
+			delete_user_meta($user_id, self::AVATAR_META);
+		}
+
+		/**
+		 * A profile photo, sent as base64 text (the app has already cropped it square and shrunk it). The image is checked
+		 * to really be a JPEG/PNG/WebP, then re-encoded as a 512px JPEG, which also strips any hidden metadata.
+		 */
+		public function set_avatar($request) {
+			$limited = $this->rate_limit('avatar', 10, HOUR_IN_SECONDS);
+			if (is_wp_error($limited)) {
+				return $limited;
+			}
+			$bad = function (string $message, int $status = 400) {
+				return new WP_Error('mptbm_app_bad_image', $message, array('status' => $status));
+			};
+			$raw = (string) $request->get_param('image');
+			$raw = preg_replace('#^data:image/[a-z+]+;base64,#i', '', $raw);
+			if (strlen($raw) > 3 * 1024 * 1024) {
+				return $bad(esc_html__('That photo is too large. Please choose a smaller one.', 'ecab-taxi-booking-manager'), 413);
+			}
+			$bytes = base64_decode($raw, true);
+			$info = $bytes ? @getimagesizefromstring($bytes) : false;
+			if (!$info || !in_array($info[2], array(IMAGETYPE_JPEG, IMAGETYPE_PNG, IMAGETYPE_WEBP), true) || $info[0] > 4096 || $info[1] > 4096) {
+				return $bad(esc_html__('Please choose a JPEG, PNG or WebP photo.', 'ecab-taxi-booking-manager'));
+			}
+			require_once ABSPATH . 'wp-admin/includes/file.php';
+			require_once ABSPATH . 'wp-admin/includes/image.php';
+			require_once ABSPATH . 'wp-admin/includes/media.php';
+
+			$user_id = get_current_user_id();
+			$tmp = wp_tempnam('avatar');
+			file_put_contents($tmp, $bytes);
+			$editor = wp_get_image_editor($tmp);
+			if (is_wp_error($editor)) {
+				@unlink($tmp);
+				return $bad(esc_html__('That photo could not be read.', 'ecab-taxi-booking-manager'));
+			}
+			$editor->resize(512, 512, true);
+			$editor->set_quality(86);
+			$saved = $editor->save($tmp . '.jpg', 'image/jpeg');
+			@unlink($tmp);
+			if (is_wp_error($saved) || empty($saved['path'])) {
+				return $bad(esc_html__('That photo could not be saved.', 'ecab-taxi-booking-manager'), 500);
+			}
+			$upload = wp_upload_bits('profile-' . $user_id . '-' . wp_generate_password(6, false) . '.jpg', null, (string) file_get_contents($saved['path']));
+			@unlink($saved['path']);
+			if (!empty($upload['error'])) {
+				return $bad(esc_html__('That photo could not be saved.', 'ecab-taxi-booking-manager'), 500);
+			}
+			$attachment = wp_insert_attachment(array('post_mime_type' => 'image/jpeg', 'post_title' => 'Profile photo', 'post_status' => 'inherit', 'post_author' => $user_id), $upload['file']);
+			if (is_wp_error($attachment) || !$attachment) {
+				return $bad(esc_html__('That photo could not be saved.', 'ecab-taxi-booking-manager'), 500);
+			}
+			wp_update_attachment_metadata($attachment, wp_generate_attachment_metadata($attachment, $upload['file']));
+			$this->drop_avatar($user_id);
+			update_user_meta($user_id, self::AVATAR_META, (int) $attachment);
+			return new WP_REST_Response($this->prepare_user($user_id), 200);
+		}
+
+		public function remove_avatar($request) {
+			$user_id = get_current_user_id();
+			$this->drop_avatar($user_id);
+			return new WP_REST_Response($this->prepare_user($user_id), 200);
+		}
+
+		public function get_me($request) {
+			return new WP_REST_Response($this->prepare_user(get_current_user_id()), 200);
+		}
+
+		public function update_me($request) {
+			$user_id = get_current_user_id();
+			$updates = array('ID' => $user_id);
+			foreach (array('first_name', 'last_name') as $field) {
+				if (null !== $request->get_param($field)) {
+					$updates[$field] = sanitize_text_field((string) $request->get_param($field));
+				}
+			}
+			wp_update_user($updates);
+			if (null !== $request->get_param('first_name')) {
+				update_user_meta($user_id, 'billing_first_name', $updates['first_name']);
+			}
+			if (null !== $request->get_param('last_name')) {
+				update_user_meta($user_id, 'billing_last_name', $updates['last_name']);
+			}
+			if (null !== $request->get_param('phone')) {
+				update_user_meta($user_id, 'billing_phone', sanitize_text_field((string) $request->get_param('phone')));
+			}
+			if (is_array($request->get_param('billing'))) {
+				$unsupported = MPTBM_App_Booking::available();
+				if ($unsupported) {
+					return $unsupported;
+				}
+				$saved = MPTBM_App_Booking::save_billing($user_id, $request->get_param('billing'));
+				if (is_wp_error($saved)) {
+					return $saved;
+				}
+			}
+			$new_password = (string) $request->get_param('new_password');
+			if ('' !== $new_password) {
+				$user = get_userdata($user_id);
+				if (!wp_check_password((string) $request->get_param('current_password'), $user->user_pass, $user_id)) {
+					return $this->auth_error('mptbm_app_bad_password', esc_html__('Current password is incorrect.', 'ecab-taxi-booking-manager'), 403);
+				}
+				if (strlen($new_password) < 8 || strlen($new_password) > 128) {
+					return $this->auth_error('mptbm_app_weak_password', esc_html__('Password must be 8 to 128 characters.', 'ecab-taxi-booking-manager'));
+				}
+				wp_set_password($new_password, $user_id);
+				$this->revoke_all_tokens($user_id);
+				return new WP_REST_Response($this->token_response($user_id), 200); // new session for this device
+			}
+			return new WP_REST_Response($this->prepare_user($user_id), 200);
+		}
+
+		/**
+		 * Delete the signed-in customer's account (the stores require this to be possible from inside the app).
+		 * Needs the password again, and never touches staff or administrator accounts. WooCommerce keeps the orders
+		 * themselves, as it does when any customer is removed, for the shop's records.
+		 */
+		public function delete_me($request) {
+			$limited = $this->rate_limit('delete_account', 5, HOUR_IN_SECONDS);
+			if (is_wp_error($limited)) {
+				return $limited;
+			}
+			$user_id = get_current_user_id();
+			$user = get_userdata($user_id);
+			if (!$user || user_can($user, 'edit_posts') || user_can($user, 'manage_options') || user_can($user, 'manage_woocommerce')) {
+				return $this->auth_error('mptbm_app_delete_refused', esc_html__('This account can only be removed from the website.', 'ecab-taxi-booking-manager'), 403);
+			}
+			if (!wp_check_password((string) $request->get_param('current_password'), $user->user_pass, $user_id)) {
+				return $this->auth_error('mptbm_app_bad_password', esc_html__('Password is incorrect.', 'ecab-taxi-booking-manager'), 403);
+			}
+			$this->revoke_all_tokens($user_id);
+			$this->drop_avatar($user_id);
+			if (!function_exists('wp_delete_user')) {
+				require_once ABSPATH . 'wp-admin/includes/user.php';
+			}
+			if (!wp_delete_user($user_id)) {
+				return $this->auth_error('mptbm_app_delete_failed', esc_html__('Your account could not be deleted. Please contact us.', 'ecab-taxi-booking-manager'), 500);
+			}
+			return new WP_REST_Response(array('success' => true), 200);
+		}
+
+		/* -------------------------------------------------------------------- bookings */
+
+		public function get_extras($request) {
+			$id = (int) $request['id'];
+			if (MPTBM_Function::get_cpt() !== get_post_type($id) || 'publish' !== get_post_status($id)) {
+				return new WP_Error('mptbm_app_not_found', esc_html__('Vehicle not found.', 'ecab-taxi-booking-manager'), array('status' => 404));
+			}
+			return new WP_REST_Response(MPTBM_App_Booking::extras($id), 200);
+		}
+
+		public function get_checkout_form($request) {
+			$unsupported = MPTBM_App_Booking::available();
+			$response = $unsupported ?: new WP_REST_Response(MPTBM_App_Booking::checkout_form(get_current_user_id()), 200);
+			if (!headers_sent()) {
+				header_remove('Set-Cookie'); // loading the cart starts a WooCommerce session the stateless app does not use
+			}
+			return $response;
+		}
+
+		public function get_states($request) {
+			if ($unsupported = MPTBM_App_Booking::available()) {
+				return $unsupported;
+			}
+			return new WP_REST_Response(MPTBM_App_Booking::states((string) $request->get_param('country')), 200);
+		}
+
+		public function create_booking($request) {
+			$params = $request->get_json_params();
+			$result = MPTBM_App_Booking::create(is_array($params) ? $params : array(), get_current_user_id());
+			return is_wp_error($result) ? $result : new WP_REST_Response($result, 201);
+		}
+
+		public function list_bookings($request) {
+			$result = MPTBM_App_Booking::list(get_current_user_id(), max(1, (int) $request->get_param('page')));
+			return is_wp_error($result) ? $result : new WP_REST_Response($result, 200);
+		}
+
+		public function get_booking($request) {
+			$result = MPTBM_App_Booking::get((int) $request['id'], get_current_user_id());
+			return is_wp_error($result) ? $result : new WP_REST_Response($result, 200);
+		}
+
+		public function push_register($request) {
+			$result = MPTBM_App_Push::register(get_current_user_id(), (string) $request->get_param('token'));
+			return is_wp_error($result) ? $result : new WP_REST_Response(array('success' => true), 200);
+		}
+
+		public function push_unregister($request) {
+			MPTBM_App_Push::remove(get_current_user_id(), (string) $request->get_param('token'));
+			return new WP_REST_Response(array('success' => true), 200);
+		}
+
+		public function cancel_booking($request) {
+			$result = MPTBM_App_Booking::request_cancellation((int) $request['id'], get_current_user_id());
+			return is_wp_error($result) ? $result : new WP_REST_Response($result, 200);
+		}
+
+		public function change_booking($request) {
+			$result = MPTBM_App_Booking::request_change((int) $request['id'], get_current_user_id(), (string) $request->get_param('text'));
+			return is_wp_error($result) ? $result : new WP_REST_Response($result, 200);
+		}
+
+		public function get_pay_link($request) {
+			$result = MPTBM_App_Booking::new_pay_link((int) $request['id'], get_current_user_id(), sanitize_key((string) $request->get_param('method')), (string) $request->get_param('return_url'));
+			return is_wp_error($result) ? $result : new WP_REST_Response($result, 200);
+		}
+
+		/* ----------------------------------------------------------------------- places */
+
+		/** The distance and time of the route between the chosen places: the readout under the website's form. */
+		public function get_route($request) {
+			$params = $request->get_json_params();
+			$points = array();
+			foreach (array_slice((array) ($params['points'] ?? array()), 0, 12) as $point) {
+				if (is_array($point) && isset($point['lat'], $point['lng']) && is_numeric($point['lat']) && is_numeric($point['lng']) && abs((float) $point['lat']) <= 90 && abs((float) $point['lng']) <= 180) {
+					$points[] = array('lat' => (float) $point['lat'], 'lng' => (float) $point['lng']);
+				}
+			}
+			if (count($points) < 2) {
+				return new WP_Error('mptbm_app_bad_route', esc_html__('Choose a pick-up and a drop-off.', 'ecab-taxi-booking-manager'), array('status' => 400));
+			}
+			$route = MPTBM_Function::get_server_distance_multi($points);
+			if (!$route) {
+				return new WP_Error('mptbm_app_no_route', esc_html__('The route between these places could not be calculated.', 'ecab-taxi-booking-manager'), array('status' => 422));
+			}
+			return new WP_REST_Response(array(
+				'distance' => (float) $route['distance'],
+				'duration' => (float) $route['duration'],
+				'distance_text' => MPTBM_Function::format_distance_text($route['distance']),
+				'duration_text' => MPTBM_Function::format_duration_text($route['duration']),
+				// Fewest whole hours an hourly booking of this route can be for.
+				'hours_needed' => MPTBM_Function::required_hourly_hours($route['duration']),
+				// The road the trip follows, for drawing it on the app's map. Display only: prices never use it.
+				'polyline' => self::route_shape($points),
+			), 200);
+		}
+
+		/**
+		 * The driving route's shape as a Google-encoded polyline (precision 5), or null when it can't be had.
+		 * Cached for a day per set of places, so a customer re-opening a trip doesn't re-query the router.
+		 */
+		private static function route_shape(array $points) {
+			$coords = array();
+			foreach ($points as $point) {
+				$coords[] = round($point['lng'], 5) . ',' . round($point['lat'], 5); // the router wants lng,lat
+			}
+			$tomtom = MPTBM_App_Contact::uses_tomtom();
+			$key = 'mptbm_app_shape_' . ($tomtom ? 't_' : '') . md5(implode(';', $coords));
+			$cached = get_transient($key);
+			if (false !== $cached) {
+				return '' === $cached ? null : $cached;
+			}
+			$shape = $tomtom ? self::tomtom_shape($points) : '';
+			if ('' === $shape) { // OpenStreetMap's router, also when TomTom has nothing for these places
+				$response = wp_remote_get('https://router.project-osrm.org/route/v1/driving/' . implode(';', $coords) . '?overview=full&geometries=polyline', array('timeout' => 8));
+				if (!is_wp_error($response) && 200 === (int) wp_remote_retrieve_response_code($response)) {
+					$data = json_decode(wp_remote_retrieve_body($response), true);
+					$line = is_array($data) && 'Ok' === ($data['code'] ?? '') ? ($data['routes'][0]['geometry'] ?? '') : '';
+					// An encoded line is plain characters; anything else, or something enormous, is not used.
+					if (is_string($line) && strlen($line) <= 120000 && preg_match('/^[\x3f-\x7e]+$/', $line)) {
+						$shape = $line;
+					}
+				}
+			}
+			// A failed lookup is remembered briefly so a down router isn't hit on every request.
+			set_transient($key, $shape, '' === $shape ? 5 * MINUTE_IN_SECONDS : DAY_IN_SECONDS);
+			return '' === $shape ? null : $shape;
+		}
+
+		/** The road TomTom's router finds (the service the site prices with), as an encoded polyline; '' when it has none. */
+		private static function tomtom_shape(array $points): string {
+			$api_key = trim((string) MP_Global_Function::get_settings('mptbm_map_api_settings', 'tomtom_api_key', ''));
+			$path = implode(':', array_map(static function ($p) {
+				return round($p['lat'], 5) . ',' . round($p['lng'], 5);
+			}, $points));
+			$route_type = 'yes' === MP_Global_Function::get_settings('mptbm_map_api_settings', 'use_shortest_route', 'no') ? 'shortest' : 'fastest';
+			$url = add_query_arg(
+				array('key' => rawurlencode($api_key), 'travelMode' => 'car', 'routeType' => $route_type, 'routeRepresentation' => 'polyline'),
+				'https://api.tomtom.com/routing/1/calculateRoute/' . rawurlencode($path) . '/json'
+			);
+			$response = wp_remote_get($url, array('timeout' => 8));
+			if (is_wp_error($response) || 200 !== (int) wp_remote_retrieve_response_code($response)) {
+				return '';
+			}
+			$data = json_decode(wp_remote_retrieve_body($response), true);
+			$line = array();
+			foreach ((array) ($data['routes'][0]['legs'] ?? array()) as $leg) {
+				foreach ((array) ($leg['points'] ?? array()) as $pt) {
+					if (isset($pt['latitude'], $pt['longitude']) && is_numeric($pt['latitude']) && is_numeric($pt['longitude'])) {
+						$line[] = array((float) $pt['latitude'], (float) $pt['longitude']);
+					}
+				}
+			}
+			if (count($line) < 2 || count($line) > 20000) {
+				return '';
+			}
+			return self::encode_polyline($line);
+		}
+
+		/** Google's encoded-polyline format (precision 5), which the app already decodes. */
+		private static function encode_polyline(array $line): string {
+			$out = '';
+			$prev = array(0, 0);
+			foreach ($line as $pt) {
+				foreach (array(0, 1) as $i) {
+					$value = (int) round($pt[$i] * 1e5);
+					$delta = $value - $prev[$i];
+					$prev[$i] = $value;
+					$delta = $delta < 0 ? ~($delta << 1) : ($delta << 1);
+					while ($delta >= 0x20) {
+						$out .= chr((0x20 | ($delta & 0x1f)) + 63);
+						$delta >>= 5;
+					}
+					$out .= chr($delta + 63);
+				}
+			}
+			return $out;
+		}
+
+		public function search_places($request) {
+			$lat = $request->get_param('lat');
+			$lng = $request->get_param('lng');
+			$places = MPTBM_App_Places::search((string) $request->get_param('q'), null !== $lat && null !== $lng ? (float) $lat : null, null !== $lat && null !== $lng ? (float) $lng : null);
+			return is_wp_error($places) ? $places : new WP_REST_Response($places, 200);
+		}
+
+		public function reverse_place($request) {
+			$places = MPTBM_App_Places::reverse((float) $request->get_param('lat'), (float) $request->get_param('lng'));
+			if (is_wp_error($places)) {
+				return $places;
+			}
+			return new WP_REST_Response($places ? $places[0] : null, 200);
+		}
+
+		/* ------------------------------------------------------------------------ quote */
+
+		public function get_quote($request) {
+			$params = $request->get_json_params();
+			$result = MPTBM_App_Quote::quote(is_array($params) ? $params : $request->get_params());
+			return is_wp_error($result) ? $result : new WP_REST_Response($result, 200);
+		}
+
+		/* ----------------------------------------------------------------------- config */
+
+		private function plugin_active(string $needle): bool {
+			$active = (array) get_option('active_plugins', array());
+			if (is_multisite()) {
+				$active = array_merge($active, array_keys((array) get_site_option('active_sitewide_plugins', array())));
+			}
+			foreach ($active as $plugin) {
+				if (false !== strpos((string) $plugin, $needle)) {
+					return true;
+				}
+			}
+			return false;
+		}
+
+		private function payment_methods(): array {
+			$methods = array();
+			if (function_exists('WC') && WC()->payment_gateways()) {
+				foreach (WC()->payment_gateways()->payment_gateways() as $id => $gateway) {
+					if ('yes' !== $gateway->enabled) {
+						continue;
+					}
+					$methods[] = array(
+						'id' => (string) $id,
+						'title' => wp_strip_all_tags($gateway->get_title()),
+						'description' => wp_strip_all_tags($gateway->get_description()),
+						'offline' => in_array($id, array('bacs', 'cheque', 'cod'), true),
+					);
+				}
+			}
+			return $methods;
+		}
+
+		/** The logo for the app: the one chosen in Mobile App settings, else the site's own ('' = none). */
+		private function brand_logo(): string {
+			$id = absint(MP_Global_Function::get_settings('mptbm_app_settings', 'brand_logo', 0));
+			$url = $id ? wp_get_attachment_image_url($id, 'medium_large') : '';
+			if (!$url) {
+				$site = (int) get_theme_mod('custom_logo');
+				$url = $site ? wp_get_attachment_image_url($site, 'medium_large') : '';
+			}
+			return (string) ($url ?: '');
+		}
+
+		/** The shop's brand colour for the app and a text colour that stays readable on it ('' = use the app's own). */
+		private function brand(): array {
+			$logo = $this->brand_logo();
+			$primary = strtolower(trim((string) MP_Global_Function::get_settings('mptbm_app_settings', 'brand_color', '')));
+			if (!preg_match('/^#[0-9a-f]{6}$/', $primary)) {
+				return array('primary' => '', 'on_primary' => '', 'logo' => $logo);
+			}
+			$channels = array_map(static function ($hex) {
+				$c = hexdec($hex) / 255;
+				return $c <= 0.03928 ? $c / 12.92 : pow(($c + 0.055) / 1.055, 2.4);
+			}, str_split(substr($primary, 1), 2));
+			$luminance = 0.2126 * $channels[0] + 0.7152 * $channels[1] + 0.0722 * $channels[2];
+			return array('primary' => $primary, 'on_primary' => $luminance > 0.4 ? '#111827' : '#ffffff', 'logo' => $logo);
+		}
+
+		private function currency_config(): array {
+			$has_wc = function_exists('get_woocommerce_currency');
+			return array(
+				'code' => $has_wc ? get_woocommerce_currency() : 'USD',
+				'symbol' => $has_wc ? html_entity_decode(get_woocommerce_currency_symbol(), ENT_QUOTES, 'UTF-8') : '$',
+				'position' => $has_wc ? get_option('woocommerce_currency_pos', 'left') : 'left',
+				'decimals' => function_exists('wc_get_price_decimals') ? wc_get_price_decimals() : 2,
+				'decimal_separator' => function_exists('wc_get_price_decimal_separator') ? wc_get_price_decimal_separator() : '.',
+				'thousand_separator' => function_exists('wc_get_price_thousand_separator') ? wc_get_price_thousand_separator() : ',',
+			);
+		}
+
+		public function get_config($request) {
+			$logo_id = (int) get_theme_mod('custom_logo');
+			$has_pro = class_exists('MPTBM_Plugin_Pro');
+			$mode = class_exists('MPTBM_Booking_Mode') ? MPTBM_Booking_Mode::get_mode() : '';
+			$general = 'mptbm_general_settings';
+
+			$config = array(
+				'api_version' => self::API_VERSION,
+				'plugin_version' => defined('MPTBM_PLUGIN_VERSION') ? MPTBM_PLUGIN_VERSION : '',
+				'site' => array(
+					'name' => get_bloginfo('name'),
+					'url' => home_url('/'),
+					'logo' => $logo_id ? wp_get_attachment_image_url($logo_id, 'medium') : '',
+					'icon' => get_site_icon_url(192),
+					'timezone' => wp_timezone_string(),
+					'language' => get_locale(),
+				),
+				'brand' => $this->brand(),
+				'currency' => $this->currency_config(),
+				'distance_unit' => 'mile' === MP_Global_Function::get_settings('mp_global_settings', 'km_or_mile', 'km') ? 'mile' : 'km',
+				'map' => array(
+					'provider' => MP_Global_Function::get_settings('mptbm_map_api_settings', 'display_map', 'openstreetmap'),
+					'default_lat' => (float) MP_Global_Function::get_settings('mptbm_map_api_settings', 'mp_latitude', '23.81234828905659'),
+					'default_lng' => (float) MP_Global_Function::get_settings('mptbm_map_api_settings', 'mp_longitude', '90.41069652669002'),
+					'country' => MP_Global_Function::get_settings('mptbm_map_api_settings', 'mp_country', 'BD'),
+					'restrict_to_country' => 'yes' === MP_Global_Function::get_settings('mptbm_map_api_settings', 'mp_country_restriction', 'no'),
+					// How the app itself draws maps: Google when the company entered a key under Mobile App settings, else OpenStreetMap.
+					'app_provider' => MPTBM_App_Contact::app_map()['provider'],
+					'google_key' => MPTBM_App_Contact::app_map()['google_key'],
+				),
+				'booking' => array(
+					'mode' => $mode,
+					'minimum_booking_hours' => (float) MP_Global_Function::get_settings($general, 'minimum_booking_hours', 0),
+					'max_advance_days' => (int) MP_Global_Function::get_settings($general, 'max_advance_days', 0),
+					'return_on_different_date' => 'yes' === MP_Global_Function::get_settings($general, 'enable_return_in_different_date', 'no'),
+					'extra_stops' => 'yes' === MP_Global_Function::get_settings($general, 'mptbm_extra_stop_between_pickup_dropoff', 'no'),
+					'max_extra_stops' => (int) MP_Global_Function::get_settings($general, 'mptbm_max_extra_stops', 0),
+					'show_passengers' => 'yes' === MP_Global_Function::get_settings($general, 'show_number_of_passengers', 'no'),
+					'no_vehicle_message' => (string) MP_Global_Function::get_settings($general, 'no_transport_message', ''),
+				),
+				'payment' => array(
+					'methods' => 'custom' === $mode ? array() : $this->payment_methods(),
+					'pay_url_template' => '', // filled in by the checkout endpoints
+				),
+				'features' => array(
+					'pro' => $has_pro,
+					'my_bookings' => true,
+					'cancel_booking' => $has_pro,
+					'modify_booking' => $has_pro,
+					'driver_info' => $has_pro,
+					'push' => true,
+					'pdf_ticket' => $has_pro && class_exists('\\Mpdf\\Mpdf') && class_exists('MPTBM_Pro_Pdf'),
+					'tier_pricing' => $this->plugin_active('distance-base-tier-pricing'),
+					'peak_hour_pricing' => $this->plugin_active('taxi-peak-hour-pricing'),
+				),
+				'price_modes' => $this->price_modes(),
+				'search_modes' => $this->search_modes(),
+				'search_form' => array(
+					'tabs' => MPTBM_App_Form::definition(),
+					'return_on_other_date' => 'yes' === MP_Global_Function::get_settings($general, 'enable_return_in_different_date', 'no'),
+					'use_my_location' => 'no' !== MP_Global_Function::get_settings($general, 'mptbm_enable_use_my_location', 'yes'),
+				),
+				// Where a passenger can reach the company: the Mobile App settings (email falls back to the shop's own address).
+				'support' => MPTBM_App_Contact::support(),
+				'links' => array(
+					'terms' => function_exists('wc_terms_and_conditions_page_id') && wc_terms_and_conditions_page_id() ? get_permalink(wc_terms_and_conditions_page_id()) : '',
+					'privacy' => get_privacy_policy_url(),
+				),
+			);
+
+			// The app must always see the settings as they are now (trip types, map, support contacts): never let a page cache keep an old copy.
+			if (!defined('DONOTCACHEPAGE')) {
+				define('DONOTCACHEPAGE', true);
+			}
+			$response = new WP_REST_Response(apply_filters('mptbm_app_config', $config), 200);
+			$response->header('Cache-Control', 'no-cache, no-store, must-revalidate, max-age=0');
+			$response->header('X-LiteSpeed-Cache-Control', 'no-cache');
+			return $response;
+		}
+
+		/** Pricing modes in use by published vehicles, so the app shows only the forms that apply. */
+		private function price_modes(): array {
+			$modes = array();
+			foreach ($this->query_vehicles(array('posts_per_page' => -1, 'fields' => 'ids'))->posts as $id) {
+				$mode = (string) MP_Global_Function::get_post_info($id, 'mptbm_price_based');
+				if ('' !== $mode) {
+					$modes[$mode] = true;
+				}
+			}
+			return array_keys($modes);
+		}
+
+		/**
+		 * The trip types the app can offer, i.e. the search modes the published vehicles are sold
+		 * under, with what each one needs from the customer.
+		 */
+		private function search_modes(): array {
+			$modes = array();
+			foreach ($this->price_modes() as $model) {
+				$mode = MPTBM_App_Quote::search_mode_for_model($model);
+				$modes[$mode] = array(
+					'id' => $mode,
+					'needs_dropoff' => in_array($mode, MPTBM_App_Quote::COORDINATE_MODES, true),
+					'needs_duration' => in_array($mode, array('fixed_hourly', 'fixed_daily'), true),
+					'duration_unit' => 'fixed_daily' === $mode ? 'day' : ('fixed_hourly' === $mode ? 'hour' : ''),
+					'uses_location_list' => in_array($mode, MPTBM_App_Quote::LIST_MODES, true),
+				);
+			}
+			return array_values($modes);
+		}
+
+		/* -------------------------------------------------------------------- vehicles */
+
+		private function query_vehicles(array $args = array()): WP_Query {
+			return new WP_Query(array_merge(array(
+				'post_type' => MPTBM_Function::get_cpt(),
+				'post_status' => 'publish',
+				'orderby' => array('menu_order' => 'ASC', 'date' => 'DESC'),
+				'no_found_rows' => false,
+			), $args));
+		}
+
+		private function prepare_vehicle(int $id): array {
+			$features = array();
+			$feature_rows = MP_Global_Function::get_post_info($id, 'mptbm_features', array());
+			if (is_array($feature_rows) && 'off' !== MP_Global_Function::get_post_info($id, 'display_mptbm_features', 'on')) {
+				foreach ($feature_rows as $row) {
+					$text = isset($row['text']) ? trim((string) $row['text']) : '';
+					if ('' !== $text) {
+						$features[] = array(
+							'label' => isset($row['label']) ? wp_strip_all_tags((string) $row['label']) : '',
+							'icon' => isset($row['icon']) ? (string) $row['icon'] : '',
+							'text' => wp_strip_all_tags($text),
+						);
+					}
+				}
+			}
+
+			$thumb_id = get_post_thumbnail_id($id);
+			$terms = get_the_terms($id, MPTBM_Function::get_category_slug());
+			return array(
+				'id' => $id,
+				'title' => wp_strip_all_tags(get_the_title($id)),
+				'excerpt' => wp_strip_all_tags(get_the_excerpt($id)),
+				'description' => wp_kses_post(apply_filters('the_content', get_post_field('post_content', $id))),
+				'image' => $thumb_id ? wp_get_attachment_image_url($thumb_id, 'medium_large') : '',
+				'image_full' => $thumb_id ? wp_get_attachment_image_url($thumb_id, 'large') : '',
+				'max_passengers' => (int) MPTBM_Function::get_feature_passenger($id),
+				'max_bags' => (int) MPTBM_Function::get_feature_bag($id),
+				'features' => $features,
+				'price_based' => (string) MP_Global_Function::get_post_info($id, 'mptbm_price_based'),
+				'categories' => ($terms && !is_wp_error($terms)) ? array_map(static function ($term) {
+					return array('id' => $term->term_id, 'name' => $term->name, 'slug' => $term->slug);
+				}, $terms) : array(),
+			);
+		}
+
+		public function get_vehicles($request) {
+			$args = array(
+				'posts_per_page' => (int) $request->get_param('per_page'),
+				'paged' => (int) $request->get_param('page'),
+				'fields' => 'ids',
+			);
+			$passengers = (int) $request->get_param('passengers');
+			if ($passengers > 0) {
+				$args['meta_query'] = array(array('key' => 'mptbm_maximum_passenger', 'value' => $passengers, 'type' => 'NUMERIC', 'compare' => '>='));
+			}
+			$query = $this->query_vehicles($args);
+			$response = new WP_REST_Response(array_map(array($this, 'prepare_vehicle'), $query->posts), 200);
+			$response->header('X-WP-Total', (string) $query->found_posts);
+			$response->header('X-WP-TotalPages', (string) $query->max_num_pages);
+			return $response;
+		}
+
+		public function get_vehicle($request) {
+			$id = (int) $request['id'];
+			if (MPTBM_Function::get_cpt() !== get_post_type($id) || 'publish' !== get_post_status($id)) {
+				return new WP_Error('mptbm_app_not_found', esc_html__('Vehicle not found.', 'ecab-taxi-booking-manager'), array('status' => 404));
+			}
+			return new WP_REST_Response($this->prepare_vehicle($id), 200);
+		}
+
+		/* ------------------------------------------------------------------- locations */
+
+		private function location_label(string $value): string {
+			if (0 === strpos($value, 'term_')) {
+				$term = get_term(absint(substr($value, 5)));
+				return ($term && !is_wp_error($term)) ? $term->name : $value;
+			}
+			return $value;
+		}
+
+		public function get_locations($request) {
+			$price_based = (string) $request->get_param('price_based');
+			$start = sanitize_text_field((string) $request->get_param('start'));
+			if ('fixed_route' === $price_based) {
+				// One list of named routes; there is no separate drop-off.
+				$values = '' === $start ? MPTBM_Function::get_all_routes() : array();
+			} else {
+				$values = '' === $start
+					? MPTBM_Function::get_all_start_location('', $price_based)
+					: MPTBM_Function::get_end_location($start, '', $price_based);
+			}
+			$items = array();
+			foreach (array_values((array) $values) as $value) {
+				$items[] = array('value' => (string) $value, 'label' => $this->location_label((string) $value));
+			}
+			return new WP_REST_Response($items, 200);
+		}
+	}
+	new MPTBM_App_Api();
+}
